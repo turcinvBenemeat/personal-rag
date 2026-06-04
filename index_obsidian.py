@@ -331,14 +331,14 @@ def main():
         target_devices=["cpu"] * _CPU_CORES
     )
     try:
-        all_embeddings = SentenceTransformer.encode_multi_process(
+        all_embeddings = model.encode_multi_process(
             all_docs,
             mp_pool,
             batch_size=64,
             normalize_embeddings=True,
         )
     finally:
-        SentenceTransformer.stop_multi_process_pool(mp_pool)
+        model.stop_multi_process_pool(mp_pool)
 
     log("Embedding done. Upserting to ChromaDB...")
 
