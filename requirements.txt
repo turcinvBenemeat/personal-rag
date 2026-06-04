@@ -65,6 +65,7 @@ protobuf==6.33.6
 pydantic==2.13.4
 pydantic-core==2.46.4
 pygments==2.20.0
+pypdf==6.12.2
 pypika==0.51.1
 pyproject-hooks==1.2.0
 python-dateutil==2.9.0.post0

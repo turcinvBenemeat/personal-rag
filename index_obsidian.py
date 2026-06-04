@@ -11,6 +11,7 @@ _posthog.capture = lambda *a, **kw: None  # chromadb 0.6.x / posthog 7.x signatu
 import chromadb
 import frontmatter
 import yaml
+from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"
@@ -86,6 +87,78 @@ def chunk_text(text: str, max_chars: int, overlap: int):
 def stable_id(*parts):
     raw = "::".join(str(p) for p in parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def clean_pdf_title(filename: str) -> str:
+    """Fallback title from filename when PDF metadata is unavailable."""
+    name = Path(filename).stem
+    name = re.sub(r"[_\-]?(v\d+|[23456]e|[23456]rdedition|[23456]thedition)$", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"[_\-]+", " ", name)
+    return name.strip().title()
+
+
+def index_pdf(pdf_path: Path, source_type: str, max_chars: int, overlap: int):
+    """
+    Extract text from a PDF and return (ids, documents, metadatas) ready for ChromaDB.
+    Pages are batched into text blocks, then chunked by character count.
+    """
+    try:
+        reader = PdfReader(str(pdf_path))
+    except Exception as exc:
+        print(f"  skip pdf read error: {pdf_path.name}: {exc}")
+        return [], [], []
+
+    # Prefer embedded PDF title over filename
+    pdf_meta = reader.metadata
+    title = (pdf_meta.title.strip() if pdf_meta and pdf_meta.title else None) or clean_pdf_title(pdf_path.name)
+    ids, documents, metadatas = [], [], []
+
+    # Accumulate pages into blocks; flush when block exceeds max_chars
+    block_text = ""
+    block_start = 1
+
+    def flush_block(block_text, block_start, end_page, chunk_idx_offset=0):
+        nonlocal ids, documents, metadatas
+        chunks = chunk_text(block_text.strip(), max_chars, overlap)
+        for chunk_index, chunk in enumerate(chunks):
+            heading = f"p.{block_start}" if block_start == end_page else f"p.{block_start}-{end_page}"
+            chunk_id = stable_id(str(pdf_path), block_start, chunk_index + chunk_idx_offset, chunk[:80])
+            ids.append(chunk_id)
+            documents.append(chunk)
+            metadatas.append({
+                "path": pdf_path.name,
+                "title": title,
+                "heading": heading,
+                "type": source_type,
+                "domain": "",
+                "status": "",
+                "source": "pdf",
+                "tags": "",
+                "wikilinks": "",
+            })
+
+    for page_num, page in enumerate(reader.pages, 1):
+        try:
+            page_text = (page.extract_text() or "").strip()
+            # Strip lone surrogates produced by some PDF encodings
+            page_text = page_text.encode("utf-8", errors="replace").decode("utf-8")
+        except Exception:
+            continue
+
+        if len(page_text) < 40:  # skip near-blank pages (headers, TOC entries, etc.)
+            continue
+
+        block_text += "\n\n" + page_text
+
+        if len(block_text) >= max_chars:
+            flush_block(block_text, block_start, page_num)
+            block_text = ""
+            block_start = page_num + 1
+
+    if block_text.strip():
+        flush_block(block_text, block_start, len(reader.pages))
+
+    return ids, documents, metadatas
 
 
 def main():
@@ -181,6 +254,27 @@ def main():
                 })
 
     print(f"Markdown chunks: {len(documents)}")
+
+    # --- PDF sources ---
+    for pdf_source in config.get("pdf_sources", []):
+        pdf_dir = Path(pdf_source["path"]).expanduser().resolve()
+        source_type = pdf_source.get("type", "resource")
+
+        if not pdf_dir.exists():
+            print(f"Warning: pdf_source path does not exist, skipping: {pdf_dir}")
+            continue
+
+        pdf_files = sorted(pdf_dir.glob("*.pdf"))
+        print(f"PDF source [{source_type}]: {pdf_dir} — {len(pdf_files)} files")
+
+        for pdf_file in pdf_files:
+            p_ids, p_docs, p_metas = index_pdf(pdf_file, source_type, max_chars, overlap)
+            if p_docs:
+                ids.extend(p_ids)
+                documents.extend(p_docs)
+                metadatas.extend(p_metas)
+
+    print(f"Total chunks (MD + PDF): {len(documents)}")
 
     if not documents:
         raise RuntimeError("No documents found to index.")
