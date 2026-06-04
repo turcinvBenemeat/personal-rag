@@ -1,6 +1,8 @@
 import hashlib
+import multiprocessing
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
@@ -15,6 +17,8 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"
+_IO_WORKERS = 16           # threads for parallel text extraction (I/O bound)
+_CPU_CORES = multiprocessing.cpu_count()  # processes for embedding (CPU bound)
 
 
 def load_config():
@@ -97,33 +101,77 @@ def clean_pdf_title(filename: str) -> str:
     return name.strip().title()
 
 
-def index_pdf(pdf_path: Path, source_type: str, max_chars: int, overlap: int):
-    """
-    Extract text from a PDF and return (ids, documents, metadatas) ready for ChromaDB.
-    Pages are batched into text blocks, then chunked by character count.
-    """
+# ---------------------------------------------------------------------------
+# Per-file extraction functions (run in threads)
+# ---------------------------------------------------------------------------
+
+def extract_md_file(md_file: Path, vault_path: Path, config: dict, max_chars: int, overlap: int):
+    """Parse one Markdown file and return (ids, documents, metadatas) or ([], [], [])."""
+    rel_path = md_file.relative_to(vault_path).as_posix()
+
+    try:
+        raw = md_file.read_text(encoding="utf-8", errors="ignore")
+        raw = re.sub(r"\{\{[^}]+\}\}", "", raw)  # strip unresolved Obsidian template vars
+        parsed = frontmatter.loads(raw)
+        body = parsed.content.strip()
+        meta = dict(parsed.metadata)
+    except Exception as exc:
+        return [], [], [], f"skip parse error: {rel_path}: {exc}"
+
+    if not body:
+        return [], [], [], None
+
+    title = str(meta.get("title") or md_file.stem)
+    note_type = str(meta.get("type") or "")
+    domain = str(meta.get("domain") or "")
+    status = str(meta.get("status") or "")
+    source = str(meta.get("source") or "")
+
+    tags_value = meta.get("tags") or []
+    tags = ", ".join(str(t) for t in tags_value) if isinstance(tags_value, list) else str(tags_value)
+
+    wikilinks = ", ".join(extract_wikilinks(body))
+    sections = split_by_headings(body)
+
+    ids, documents, metadatas = [], [], []
+
+    for section_index, (heading, section_text) in enumerate(sections):
+        for chunk_index, chunk in enumerate(chunk_text(section_text, max_chars=max_chars, overlap=overlap)):
+            ids.append(stable_id(rel_path, section_index, chunk_index, chunk[:80]))
+            documents.append(chunk)
+            metadatas.append({
+                "path": rel_path,
+                "title": title,
+                "heading": heading,
+                "type": note_type,
+                "domain": domain,
+                "status": status,
+                "source": source,
+                "tags": tags,
+                "wikilinks": wikilinks,
+            })
+
+    return ids, documents, metadatas, None
+
+
+def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: int):
+    """Extract text from one PDF and return (ids, documents, metadatas) or ([], [], [])."""
     try:
         reader = PdfReader(str(pdf_path))
     except Exception as exc:
-        print(f"  skip pdf read error: {pdf_path.name}: {exc}")
-        return [], [], []
+        return [], [], [], f"skip pdf read error: {pdf_path.name}: {exc}"
 
-    # Prefer embedded PDF title over filename
     pdf_meta = reader.metadata
     title = (pdf_meta.title.strip() if pdf_meta and pdf_meta.title else None) or clean_pdf_title(pdf_path.name)
-    ids, documents, metadatas = [], [], []
 
-    # Accumulate pages into blocks; flush when block exceeds max_chars
+    ids, documents, metadatas = [], [], []
     block_text = ""
     block_start = 1
 
-    def flush_block(block_text, block_start, end_page, chunk_idx_offset=0):
-        nonlocal ids, documents, metadatas
-        chunks = chunk_text(block_text.strip(), max_chars, overlap)
-        for chunk_index, chunk in enumerate(chunks):
+    def flush_block(block_text, block_start, end_page):
+        for chunk_index, chunk in enumerate(chunk_text(block_text.strip(), max_chars, overlap)):
             heading = f"p.{block_start}" if block_start == end_page else f"p.{block_start}-{end_page}"
-            chunk_id = stable_id(str(pdf_path), block_start, chunk_index + chunk_idx_offset, chunk[:80])
-            ids.append(chunk_id)
+            ids.append(stable_id(str(pdf_path), block_start, chunk_index, chunk[:80]))
             documents.append(chunk)
             metadatas.append({
                 "path": pdf_path.name,
@@ -140,12 +188,11 @@ def index_pdf(pdf_path: Path, source_type: str, max_chars: int, overlap: int):
     for page_num, page in enumerate(reader.pages, 1):
         try:
             page_text = (page.extract_text() or "").strip()
-            # Strip lone surrogates produced by some PDF encodings
             page_text = page_text.encode("utf-8", errors="replace").decode("utf-8")
         except Exception:
             continue
 
-        if len(page_text) < 40:  # skip near-blank pages (headers, TOC entries, etc.)
+        if len(page_text) < 40:
             continue
 
         block_text += "\n\n" + page_text
@@ -158,8 +205,38 @@ def index_pdf(pdf_path: Path, source_type: str, max_chars: int, overlap: int):
     if block_text.strip():
         flush_block(block_text, block_start, len(reader.pages))
 
-    return ids, documents, metadatas
+    return ids, documents, metadatas, None
 
+
+# ---------------------------------------------------------------------------
+# Parallel collection helpers
+# ---------------------------------------------------------------------------
+
+def collect_parallel(futures_map, label: str):
+    """
+    Drain a dict of {future: name} as futures complete.
+    Returns (all_ids, all_docs, all_metas).
+    Prints errors and a summary line.
+    """
+    all_ids, all_docs, all_metas = [], [], []
+    errors = 0
+
+    for future in as_completed(futures_map):
+        ids, docs, metas, err = future.result()
+        if err:
+            print(f"  {err}")
+            errors += 1
+        all_ids.extend(ids)
+        all_docs.extend(docs)
+        all_metas.extend(metas)
+
+    print(f"{label}: {len(all_docs)} chunks ({errors} skipped)")
+    return all_ids, all_docs, all_metas
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     config = load_config()
@@ -176,6 +253,7 @@ def main():
 
     print(f"Vault: {vault_path}")
     print(f"Embedding model: {model_name}")
+    print(f"Extraction threads: {_IO_WORKERS}  |  Embedding processes: {_CPU_CORES}")
 
     model = SentenceTransformer(model_name)
 
@@ -192,70 +270,23 @@ def main():
 
     collection = client.create_collection(name=collection_name)
 
-    ids = []
-    documents = []
-    metadatas = []
+    all_ids, all_docs, all_metas = [], [], []
 
-    md_files = sorted(vault_path.rglob("*.md"))
+    # --- Markdown files (parallel) ---
+    md_files = [f for f in sorted(vault_path.rglob("*.md")) if not should_exclude(f, vault_path, config)]
+    print(f"Markdown files to index: {len(md_files)}")
 
-    for md_file in md_files:
-        if should_exclude(md_file, vault_path, config):
-            continue
+    with ThreadPoolExecutor(max_workers=_IO_WORKERS) as pool:
+        futures = {
+            pool.submit(extract_md_file, f, vault_path, config, max_chars, overlap): f.name
+            for f in md_files
+        }
+        ids, docs, metas = collect_parallel(futures, "Markdown")
+        all_ids.extend(ids)
+        all_docs.extend(docs)
+        all_metas.extend(metas)
 
-        rel_path = md_file.relative_to(vault_path).as_posix()
-
-        try:
-            raw = md_file.read_text(encoding="utf-8", errors="ignore")
-            raw = re.sub(r"\{\{[^}]+\}\}", "", raw)  # strip unresolved Obsidian template vars
-            parsed = frontmatter.loads(raw)
-            body = parsed.content.strip()
-            meta = dict(parsed.metadata)
-        except Exception as exc:
-            print(f"skip parse error: {rel_path}: {exc}")
-            continue
-
-        if not body:
-            continue
-
-        title = str(meta.get("title") or md_file.stem)
-        note_type = str(meta.get("type") or "")
-        domain = str(meta.get("domain") or "")
-        status = str(meta.get("status") or "")
-        source = str(meta.get("source") or "")
-
-        tags_value = meta.get("tags") or []
-        if isinstance(tags_value, list):
-            tags = ", ".join(str(t) for t in tags_value)
-        else:
-            tags = str(tags_value)
-
-        wikilinks = ", ".join(extract_wikilinks(body))
-
-        sections = split_by_headings(body)
-
-        for section_index, (heading, section_text) in enumerate(sections):
-            chunks = chunk_text(section_text, max_chars=max_chars, overlap=overlap)
-
-            for chunk_index, chunk in enumerate(chunks):
-                chunk_id = stable_id(rel_path, section_index, chunk_index, chunk[:80])
-
-                ids.append(chunk_id)
-                documents.append(chunk)
-                metadatas.append({
-                    "path": rel_path,
-                    "title": title,
-                    "heading": heading,
-                    "type": note_type,
-                    "domain": domain,
-                    "status": status,
-                    "source": source,
-                    "tags": tags,
-                    "wikilinks": wikilinks,
-                })
-
-    print(f"Markdown chunks: {len(documents)}")
-
-    # --- PDF sources ---
+    # --- PDF sources (parallel per source) ---
     for pdf_source in config.get("pdf_sources", []):
         pdf_dir = Path(pdf_source["path"]).expanduser().resolve()
         source_type = pdf_source.get("type", "resource")
@@ -265,35 +296,51 @@ def main():
             continue
 
         pdf_files = sorted(pdf_dir.glob("*.pdf"))
-        print(f"PDF source [{source_type}]: {pdf_dir} — {len(pdf_files)} files")
+        print(f"PDF source [{source_type}]: {len(pdf_files)} files — {pdf_dir.name}")
 
-        for pdf_file in pdf_files:
-            p_ids, p_docs, p_metas = index_pdf(pdf_file, source_type, max_chars, overlap)
-            if p_docs:
-                ids.extend(p_ids)
-                documents.extend(p_docs)
-                metadatas.extend(p_metas)
+        with ThreadPoolExecutor(max_workers=_IO_WORKERS) as pool:
+            futures = {
+                pool.submit(extract_pdf_file, f, source_type, max_chars, overlap): f.name
+                for f in pdf_files
+            }
+            ids, docs, metas = collect_parallel(futures, f"  [{source_type}]")
+            all_ids.extend(ids)
+            all_docs.extend(docs)
+            all_metas.extend(metas)
 
-    print(f"Total chunks (MD + PDF): {len(documents)}")
+    print(f"Total chunks (MD + PDF): {len(all_docs)}")
 
-    if not documents:
+    if not all_docs:
         raise RuntimeError("No documents found to index.")
 
-    batch_size = 128
+    # --- Embed across all CPU cores, then upsert ---
+    print(f"Embedding {len(all_docs)} chunks across {_CPU_CORES} processes...")
 
-    for start in range(0, len(documents), batch_size):
-        end = start + batch_size
-        batch_docs = documents[start:end]
-        batch_embeddings = model.encode(batch_docs, normalize_embeddings=True).tolist()
-
-        collection.add(
-            ids=ids[start:end],
-            documents=batch_docs,
-            embeddings=batch_embeddings,
-            metadatas=metadatas[start:end],
+    mp_pool = model.start_multi_process_pool(
+        target_devices=["cpu"] * _CPU_CORES
+    )
+    try:
+        all_embeddings = SentenceTransformer.encode_multi_process(
+            all_docs,
+            mp_pool,
+            batch_size=64,
+            normalize_embeddings=True,
         )
+    finally:
+        SentenceTransformer.stop_multi_process_pool(mp_pool)
 
-        print(f"Indexed {min(end, len(documents))}/{len(documents)} chunks")
+    print("Embedding done. Upserting to ChromaDB...")
+
+    upsert_batch = 512  # ChromaDB handles larger batches fine for upsert
+    for start in range(0, len(all_docs), upsert_batch):
+        end = start + upsert_batch
+        collection.add(
+            ids=all_ids[start:end],
+            documents=all_docs[start:end],
+            embeddings=all_embeddings[start:end].tolist(),
+            metadatas=all_metas[start:end],
+        )
+        print(f"Upserted {min(end, len(all_docs))}/{len(all_docs)} chunks")
 
     print("Indexing complete.")
 
