@@ -12,6 +12,8 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 import posthog as _posthog
 _posthog.capture = lambda *a, **kw: None  # chromadb 0.6.x / posthog 7.x signature mismatch
 
+import torch
+
 import chromadb
 import frontmatter
 import yaml
@@ -287,9 +289,11 @@ def main():
     if not vault_path.exists():
         raise RuntimeError(f"Vault path does not exist: {vault_path}")
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     log(f"Vault: {vault_path}")
     log(f"Embedding model: {model_name}")
-    log(f"Extraction threads: {_IO_WORKERS}  |  Embedding processes: {_CPU_CORES}")
+    log(f"Device: {device}" + (f" ({torch.cuda.get_device_name(0)})" if device == "cuda" else f" ({_CPU_CORES} cores, {_IO_WORKERS} I/O threads)"))
 
     client = chromadb.PersistentClient(
         path=index_path,
@@ -347,22 +351,33 @@ def main():
     if not all_docs:
         raise RuntimeError("No documents found to index.")
 
-    # --- Embed across all CPU cores, then upsert ---
-    # Workers are initialised once (model load), then fed small batches continuously.
-    # OMP_NUM_THREADS=1 per worker means N workers each own exactly 1 core.
-    embed_batch_size = 256
-    batches = [all_docs[i:i + embed_batch_size] for i in range(0, len(all_docs), embed_batch_size)]
-    log(f"Embedding {len(all_docs)} chunks in {len(batches)} batches across {_CPU_CORES} workers...")
-
-    with ProcessPoolExecutor(
-        max_workers=_CPU_CORES,
-        initializer=_init_worker,
-        initargs=(model_name,),
-    ) as executor:
-        embedding_chunks = list(executor.map(_embed_batch, batches))
-
-    all_embeddings = np.vstack(embedding_chunks)
-    log(f"Embedding done.")
+    # --- Embed and upsert ---
+    if device == "cuda":
+        # GPU path: single process, large batches — GPU handles parallelism internally.
+        # encode_multi_process() is intentionally avoided: Jetson does not support
+        # CUDA IPC (uses NvSCI instead) so cross-process tensor sharing fails.
+        log(f"Embedding {len(all_docs)} chunks on GPU (single process, batch=512)...")
+        model = SentenceTransformer(model_name, device="cuda")
+        all_embeddings = model.encode(
+            all_docs,
+            normalize_embeddings=True,
+            batch_size=512,
+            show_progress_bar=True,
+        )
+    else:
+        # CPU path: ProcessPoolExecutor — each worker loads the model once
+        # (initializer) and is fed small batches, with OMP_NUM_THREADS=1
+        # so N workers each own exactly 1 core.
+        embed_batch_size = 256
+        batches = [all_docs[i:i + embed_batch_size] for i in range(0, len(all_docs), embed_batch_size)]
+        log(f"Embedding {len(all_docs)} chunks across {_CPU_CORES} CPU workers ({len(batches)} batches)...")
+        with ProcessPoolExecutor(
+            max_workers=_CPU_CORES,
+            initializer=_init_worker,
+            initargs=(model_name,),
+        ) as executor:
+            embedding_chunks = list(executor.map(_embed_batch, batches))
+        all_embeddings = np.vstack(embedding_chunks)
 
     log("Embedding done. Upserting to ChromaDB...")
 
