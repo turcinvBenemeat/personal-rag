@@ -21,6 +21,11 @@ _IO_WORKERS = 16           # threads for parallel text extraction (I/O bound)
 _CPU_CORES = multiprocessing.cpu_count()  # processes for embedding (CPU bound)
 
 
+def log(msg: str) -> None:
+    """Print with immediate flush so progress is visible even when piped."""
+    print(msg, flush=True)
+
+
 def load_config():
     with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -216,21 +221,27 @@ def collect_parallel(futures_map, label: str):
     """
     Drain a dict of {future: name} as futures complete.
     Returns (all_ids, all_docs, all_metas).
-    Prints errors and a summary line.
+    Prints per-file progress, errors, and a summary line.
     """
     all_ids, all_docs, all_metas = [], [], []
     errors = 0
+    total = len(futures_map)
+    done = 0
 
     for future in as_completed(futures_map):
+        name = futures_map[future]
         ids, docs, metas, err = future.result()
+        done += 1
         if err:
-            print(f"  {err}")
+            log(f"  [{done}/{total}] SKIP {name}: {err.split(':', 1)[-1].strip()}")
             errors += 1
+        else:
+            log(f"  [{done}/{total}] {name}  ({len(docs)} chunks)")
         all_ids.extend(ids)
         all_docs.extend(docs)
         all_metas.extend(metas)
 
-    print(f"{label}: {len(all_docs)} chunks ({errors} skipped)")
+    log(f"{label}: {len(all_docs)} chunks total ({errors} skipped)")
     return all_ids, all_docs, all_metas
 
 
@@ -251,9 +262,9 @@ def main():
     if not vault_path.exists():
         raise RuntimeError(f"Vault path does not exist: {vault_path}")
 
-    print(f"Vault: {vault_path}")
-    print(f"Embedding model: {model_name}")
-    print(f"Extraction threads: {_IO_WORKERS}  |  Embedding processes: {_CPU_CORES}")
+    log(f"Vault: {vault_path}")
+    log(f"Embedding model: {model_name}")
+    log(f"Extraction threads: {_IO_WORKERS}  |  Embedding processes: {_CPU_CORES}")
 
     model = SentenceTransformer(model_name)
 
@@ -264,7 +275,7 @@ def main():
 
     try:
         client.delete_collection(collection_name)
-        print(f"Deleted existing collection: {collection_name}")
+        log(f"Deleted existing collection: {collection_name}")
     except Exception:
         pass
 
@@ -274,7 +285,7 @@ def main():
 
     # --- Markdown files (parallel) ---
     md_files = [f for f in sorted(vault_path.rglob("*.md")) if not should_exclude(f, vault_path, config)]
-    print(f"Markdown files to index: {len(md_files)}")
+    log(f"Markdown files to index: {len(md_files)}")
 
     with ThreadPoolExecutor(max_workers=_IO_WORKERS) as pool:
         futures = {
@@ -292,11 +303,11 @@ def main():
         source_type = pdf_source.get("type", "resource")
 
         if not pdf_dir.exists():
-            print(f"Warning: pdf_source path does not exist, skipping: {pdf_dir}")
+            log(f"Warning: pdf_source path does not exist, skipping: {pdf_dir}")
             continue
 
         pdf_files = sorted(pdf_dir.glob("*.pdf"))
-        print(f"PDF source [{source_type}]: {len(pdf_files)} files — {pdf_dir.name}")
+        log(f"PDF source [{source_type}]: {len(pdf_files)} files — {pdf_dir.name}")
 
         with ThreadPoolExecutor(max_workers=_IO_WORKERS) as pool:
             futures = {
@@ -308,13 +319,13 @@ def main():
             all_docs.extend(docs)
             all_metas.extend(metas)
 
-    print(f"Total chunks (MD + PDF): {len(all_docs)}")
+    log(f"Total chunks (MD + PDF): {len(all_docs)}")
 
     if not all_docs:
         raise RuntimeError("No documents found to index.")
 
     # --- Embed across all CPU cores, then upsert ---
-    print(f"Embedding {len(all_docs)} chunks across {_CPU_CORES} processes...")
+    log(f"Embedding {len(all_docs)} chunks across {_CPU_CORES} processes...")
 
     mp_pool = model.start_multi_process_pool(
         target_devices=["cpu"] * _CPU_CORES
@@ -329,7 +340,7 @@ def main():
     finally:
         SentenceTransformer.stop_multi_process_pool(mp_pool)
 
-    print("Embedding done. Upserting to ChromaDB...")
+    log("Embedding done. Upserting to ChromaDB...")
 
     upsert_batch = 512  # ChromaDB handles larger batches fine for upsert
     for start in range(0, len(all_docs), upsert_batch):
@@ -340,9 +351,9 @@ def main():
             embeddings=all_embeddings[start:end].tolist(),
             metadatas=all_metas[start:end],
         )
-        print(f"Upserted {min(end, len(all_docs))}/{len(all_docs)} chunks")
+        log(f"Upserted {min(end, len(all_docs))}/{len(all_docs)} chunks")
 
-    print("Indexing complete.")
+    log("Indexing complete.")
 
 
 if __name__ == "__main__":
