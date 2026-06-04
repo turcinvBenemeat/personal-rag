@@ -2,8 +2,7 @@ import hashlib
 import multiprocessing
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from multiprocessing import Pool
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -24,19 +23,27 @@ _IO_WORKERS = 16           # threads for parallel text extraction (I/O bound)
 _CPU_CORES = multiprocessing.cpu_count()  # processes for embedding (CPU bound)
 
 
-def _embed_worker(args):
+_worker_model = None  # one model instance per worker process
+
+
+def _init_worker(model_name: str) -> None:
     """
-    Subprocess worker: loads its own model instance and embeds one chunk of docs.
-    OMP/MKL threads are pinned to 1 so N workers each own exactly 1 core.
+    Called once when a worker process starts.
+    Pins the process to 1 OpenMP thread and loads the model into a global
+    so it is reused across all batches — no repeated cold-start overhead.
     """
-    docs, model_name = args
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
     import torch
     torch.set_num_threads(1)
     from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer(model_name)
-    return model.encode(docs, normalize_embeddings=True, batch_size=64)
+    global _worker_model
+    _worker_model = SentenceTransformer(model_name)
+
+
+def _embed_batch(docs: list) -> np.ndarray:
+    """Embed one batch using the already-loaded worker model."""
+    return _worker_model.encode(docs, normalize_embeddings=True, batch_size=64)
 
 
 def log(msg: str) -> None:
@@ -341,16 +348,21 @@ def main():
         raise RuntimeError("No documents found to index.")
 
     # --- Embed across all CPU cores, then upsert ---
-    # Split docs evenly across cores; each worker owns 1 core (OMP_NUM_THREADS=1)
-    n_workers = min(_CPU_CORES, len(all_docs))
-    chunk_size = max(1, len(all_docs) // n_workers)
-    doc_chunks = [all_docs[i:i + chunk_size] for i in range(0, len(all_docs), chunk_size)]
-    log(f"Embedding {len(all_docs)} chunks across {len(doc_chunks)} processes...")
+    # Workers are initialised once (model load), then fed small batches continuously.
+    # OMP_NUM_THREADS=1 per worker means N workers each own exactly 1 core.
+    embed_batch_size = 256
+    batches = [all_docs[i:i + embed_batch_size] for i in range(0, len(all_docs), embed_batch_size)]
+    log(f"Embedding {len(all_docs)} chunks in {len(batches)} batches across {_CPU_CORES} workers...")
 
-    with Pool(processes=len(doc_chunks)) as pool:
-        embedding_chunks = pool.map(_embed_worker, [(chunk, model_name) for chunk in doc_chunks])
+    with ProcessPoolExecutor(
+        max_workers=_CPU_CORES,
+        initializer=_init_worker,
+        initargs=(model_name,),
+    ) as executor:
+        embedding_chunks = list(executor.map(_embed_batch, batches))
 
     all_embeddings = np.vstack(embedding_chunks)
+    log(f"Embedding done.")
 
     log("Embedding done. Upserting to ChromaDB...")
 
