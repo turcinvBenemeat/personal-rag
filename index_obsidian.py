@@ -3,7 +3,10 @@ import multiprocessing
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import Pool
 from pathlib import Path
+
+import numpy as np
 
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
@@ -19,6 +22,21 @@ from sentence_transformers import SentenceTransformer
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"
 _IO_WORKERS = 16           # threads for parallel text extraction (I/O bound)
 _CPU_CORES = multiprocessing.cpu_count()  # processes for embedding (CPU bound)
+
+
+def _embed_worker(args):
+    """
+    Subprocess worker: loads its own model instance and embeds one chunk of docs.
+    OMP/MKL threads are pinned to 1 so N workers each own exactly 1 core.
+    """
+    docs, model_name = args
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    import torch
+    torch.set_num_threads(1)
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer(model_name)
+    return model.encode(docs, normalize_embeddings=True, batch_size=64)
 
 
 def log(msg: str) -> None:
@@ -266,8 +284,6 @@ def main():
     log(f"Embedding model: {model_name}")
     log(f"Extraction threads: {_IO_WORKERS}  |  Embedding processes: {_CPU_CORES}")
 
-    model = SentenceTransformer(model_name)
-
     client = chromadb.PersistentClient(
         path=index_path,
         settings=chromadb.Settings(anonymized_telemetry=False),
@@ -325,20 +341,16 @@ def main():
         raise RuntimeError("No documents found to index.")
 
     # --- Embed across all CPU cores, then upsert ---
-    log(f"Embedding {len(all_docs)} chunks across {_CPU_CORES} processes...")
+    # Split docs evenly across cores; each worker owns 1 core (OMP_NUM_THREADS=1)
+    n_workers = min(_CPU_CORES, len(all_docs))
+    chunk_size = max(1, len(all_docs) // n_workers)
+    doc_chunks = [all_docs[i:i + chunk_size] for i in range(0, len(all_docs), chunk_size)]
+    log(f"Embedding {len(all_docs)} chunks across {len(doc_chunks)} processes...")
 
-    mp_pool = model.start_multi_process_pool(
-        target_devices=["cpu"] * _CPU_CORES
-    )
-    try:
-        all_embeddings = model.encode_multi_process(
-            all_docs,
-            mp_pool,
-            batch_size=64,
-            normalize_embeddings=True,
-        )
-    finally:
-        model.stop_multi_process_pool(mp_pool)
+    with Pool(processes=len(doc_chunks)) as pool:
+        embedding_chunks = pool.map(_embed_worker, [(chunk, model_name) for chunk in doc_chunks])
+
+    all_embeddings = np.vstack(embedding_chunks)
 
     log("Embedding done. Upserting to ChromaDB...")
 
