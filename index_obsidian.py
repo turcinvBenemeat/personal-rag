@@ -133,6 +133,7 @@ def main():
 
         try:
             raw = md_file.read_text(encoding="utf-8", errors="ignore")
+            raw = re.sub(r"\{\{[^}]+\}\}", "", raw)  # strip unresolved Obsidian template vars
             parsed = frontmatter.loads(raw)
             body = parsed.content.strip()
             meta = dict(parsed.metadata)
