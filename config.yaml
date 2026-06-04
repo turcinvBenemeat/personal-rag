@@ -1,0 +1,22 @@
+vault_path: '/Users/turcinv/Library/CloudStorage/GoogleDrive-turcinv@btlnet.com/My Drive/mindmap/Career Knowledge Base/'
+index_path: "./chroma_db"
+collection_name: "obsidian_markdown"
+
+include_extensions:
+  - ".md"
+
+exclude_dirs:
+  - ".obsidian"
+  - ".trash"
+  - "Resources/_catalog"
+  - "Attachments"
+  - "Archive"
+  - ".git"
+
+exclude_files:
+  - ".DS_Store"
+  - "CLAUDE.md"
+
+chunk_max_chars: 1800
+chunk_overlap_chars: 250
+embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
