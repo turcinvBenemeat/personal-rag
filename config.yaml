@@ -20,7 +20,7 @@ exclude_files:
 chunk_max_chars: 1800
 chunk_overlap_chars: 250
 embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
-embedding_workers: 4    # parallel processes for embedding — reduce if RAM is tight
+embedding_workers: 2    # parallel processes for embedding — reduce if RAM is tight
 
 pdf_sources:
   - path: '/Users/turcinv/Library/CloudStorage/GoogleDrive-turcinv@btlnet.com/My Drive/mindmap/Books/'
