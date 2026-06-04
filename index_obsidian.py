@@ -1,5 +1,4 @@
 import hashlib
-import multiprocessing
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -20,7 +19,6 @@ from sentence_transformers import SentenceTransformer
 
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"
 _IO_WORKERS = 16           # threads for parallel text extraction (I/O bound)
-_CPU_CORES = multiprocessing.cpu_count()  # processes for embedding (CPU bound)
 
 
 _worker_model = None  # one model instance per worker process
@@ -287,9 +285,11 @@ def main():
     if not vault_path.exists():
         raise RuntimeError(f"Vault path does not exist: {vault_path}")
 
+    n_workers = int(config.get("embedding_workers", 4))
+
     log(f"Vault: {vault_path}")
     log(f"Embedding model: {model_name}")
-    log(f"Extraction threads: {_IO_WORKERS}  |  Embedding processes: {_CPU_CORES}")
+    log(f"Embedding workers: {n_workers}  |  I/O threads: {_IO_WORKERS}")
 
     client = chromadb.PersistentClient(
         path=index_path,
@@ -352,10 +352,10 @@ def main():
     # OMP_NUM_THREADS=1 per worker means N workers each own exactly 1 core.
     embed_batch_size = 256
     batches = [all_docs[i:i + embed_batch_size] for i in range(0, len(all_docs), embed_batch_size)]
-    log(f"Embedding {len(all_docs)} chunks in {len(batches)} batches across {_CPU_CORES} workers...")
+    log(f"Embedding {len(all_docs)} chunks in {len(batches)} batches across {n_workers} workers...")
 
     with ProcessPoolExecutor(
-        max_workers=_CPU_CORES,
+        max_workers=n_workers,
         initializer=_init_worker,
         initargs=(model_name,),
     ) as executor:
