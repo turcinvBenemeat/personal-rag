@@ -50,7 +50,7 @@ All other settings (chunk size, embedding model, excluded dirs) have sensible de
 .venv/bin/python index_obsidian.py
 ```
 
-Indexing is parallelised: 16 threads for text extraction, all CPU cores for embedding. Expect ~5–10 minutes for a large vault + book library on first run.
+Indexing is parallelised: 16 threads for text extraction, then GPU encoding if CUDA is available, or multi-process CPU embedding otherwise. Expect ~5–10 minutes for a large vault + book library on first run.
 
 ### Query
 
@@ -89,7 +89,7 @@ PDF books & resources  ─┘         │
                                    │
                                    ▼
                         Embed with all-MiniLM-L6-v2
-                        (encode_multi_process, all CPU cores)
+                        (CUDA single-process or CPU ProcessPoolExecutor)
                                    │
                                    ▼
                         ChromaDB (local, ./chroma_db)
