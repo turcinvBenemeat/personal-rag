@@ -1,5 +1,4 @@
 import hashlib
-import multiprocessing
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -22,7 +21,6 @@ from sentence_transformers import SentenceTransformer
 
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"
 _IO_WORKERS = 16           # threads for parallel text extraction (I/O bound)
-_CPU_CORES = multiprocessing.cpu_count()  # processes for embedding (CPU bound)
 
 
 _worker_model = None  # one model instance per worker process
@@ -290,10 +288,11 @@ def main():
         raise RuntimeError(f"Vault path does not exist: {vault_path}")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    cpu_workers = int(config.get("embedding_workers", 1))
 
     log(f"Vault: {vault_path}")
     log(f"Embedding model: {model_name}")
-    log(f"Device: {device}" + (f" ({torch.cuda.get_device_name(0)})" if device == "cuda" else f" ({_CPU_CORES} cores, {_IO_WORKERS} I/O threads)"))
+    log(f"Device: {device}" + (f" ({torch.cuda.get_device_name(0)})" if device == "cuda" else f" ({cpu_workers} worker(s), {_IO_WORKERS} I/O threads)"))
 
     client = chromadb.PersistentClient(
         path=index_path,
@@ -370,9 +369,9 @@ def main():
         # so N workers each own exactly 1 core.
         embed_batch_size = 256
         batches = [all_docs[i:i + embed_batch_size] for i in range(0, len(all_docs), embed_batch_size)]
-        log(f"Embedding {len(all_docs)} chunks across {_CPU_CORES} CPU workers ({len(batches)} batches)...")
+        log(f"Embedding {len(all_docs)} chunks across {cpu_workers} CPU worker(s) ({len(batches)} batches)...")
         with ProcessPoolExecutor(
-            max_workers=_CPU_CORES,
+            max_workers=cpu_workers,
             initializer=_init_worker,
             initargs=(model_name,),
         ) as executor:

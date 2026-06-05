@@ -20,6 +20,7 @@ exclude_files:
 chunk_max_chars: 1800
 chunk_overlap_chars: 250
 embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+embedding_workers: 1   # CPU fallback only (ignored when CUDA is available); keep at 1 on Jetson (8 GB unified RAM)
 
 pdf_sources:
   - path: '/Users/turcinv/Library/CloudStorage/GoogleDrive-turcinv@btlnet.com/My Drive/mindmap/Books/'

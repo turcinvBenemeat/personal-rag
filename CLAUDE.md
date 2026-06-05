@@ -101,8 +101,8 @@ Keep this. Do not remove when upgrading chromadb until confirmed fixed.
 2. PDF: reads each `.pdf` from configured `pdf_sources`, batches pages into text blocks, chunks by character count; prefers embedded PDF title metadata over filename
 
 **Embedding phase — auto-selects backend at startup:**
-3. **CPU (main branch):** `ProcessPoolExecutor` with `_CPU_CORES` workers; each worker loads the model once via `initializer=_init_worker` and sets `OMP_NUM_THREADS=1` to own exactly one core without contention
-4. **CUDA (feature/jetson):** single-process `model.encode(..., device="cuda", batch_size=512)`; GPU handles parallelism internally. `encode_multi_process()` is intentionally avoided — Jetson does not support CUDA IPC
+3. **CPU (main branch):** `ProcessPoolExecutor` with `embedding_workers` workers (from config); each worker loads the model once via `initializer=_init_worker` and sets `OMP_NUM_THREADS=1` to own exactly one core without contention
+4. **CUDA (feature/jetson):** single-process `model.encode(..., device="cuda", batch_size=512)`; GPU handles parallelism internally. `encode_multi_process()` is intentionally avoided — Jetson does not support CUDA IPC. If CUDA is unavailable, falls back to CPU path using `embedding_workers` (set to `1` in config — Jetson has 8 GB unified RAM shared with GPU)
 
 **Upsert phase:**
 5. Upserts to ChromaDB in batches of 512 (delete-then-recreate collection)
@@ -119,6 +119,7 @@ Keep this. Do not remove when upgrading chromadb until confirmed fixed.
   pip install -r requirements-jetson.txt
   ```
 - **Why not `encode_multi_process`:** Jetson uses NvSCI IPC, not CUDA IPC — cross-process tensor sharing fails. Single-process GPU encoding is the correct path.
+- **RAM:** 8 GB unified (CPU + GPU share the same pool). `embedding_workers: 1` in `config.yaml` keeps CPU fallback to a single process — each process loads the model (~100 MB) so spawning 6 workers would waste ~600 MB.
 - **ChromaDB:** `0.6.3` publishes `manylinux_2_17_aarch64` wheels — no changes needed.
 
 ## Query logic (query_obsidian.py)
