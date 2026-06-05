@@ -1,10 +1,9 @@
+import gc
 import hashlib
 import os
 import re
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-
-import numpy as np
 
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
@@ -20,30 +19,6 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"
-_IO_WORKERS = 16           # threads for parallel text extraction (I/O bound)
-
-
-_worker_model = None  # one model instance per worker process
-
-
-def _init_worker(model_name: str) -> None:
-    """
-    Called once when a worker process starts.
-    Pins the process to 1 OpenMP thread and loads the model into a global
-    so it is reused across all batches — no repeated cold-start overhead.
-    """
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
-    import torch
-    torch.set_num_threads(1)
-    from sentence_transformers import SentenceTransformer
-    global _worker_model
-    _worker_model = SentenceTransformer(model_name)
-
-
-def _embed_batch(docs: list) -> np.ndarray:
-    """Embed one batch using the already-loaded worker model."""
-    return _worker_model.encode(docs, normalize_embeddings=True, batch_size=64)
 
 
 def log(msg: str) -> None:
@@ -132,11 +107,11 @@ def clean_pdf_title(filename: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Per-file extraction functions (run in threads)
+# Per-file extraction functions (I/O-bound, safe to run in threads)
 # ---------------------------------------------------------------------------
 
 def extract_md_file(md_file: Path, vault_path: Path, config: dict, max_chars: int, overlap: int):
-    """Parse one Markdown file and return (ids, documents, metadatas) or ([], [], [])."""
+    """Parse one Markdown file and return (ids, documents, metadatas, error)."""
     rel_path = md_file.relative_to(vault_path).as_posix()
 
     try:
@@ -185,7 +160,7 @@ def extract_md_file(md_file: Path, vault_path: Path, config: dict, max_chars: in
 
 
 def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: int):
-    """Extract text from one PDF and return (ids, documents, metadatas) or ([], [], [])."""
+    """Extract text from one PDF and return (ids, documents, metadatas, error)."""
     try:
         reader = PdfReader(str(pdf_path))
     except Exception as exc:
@@ -239,35 +214,32 @@ def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: 
 
 
 # ---------------------------------------------------------------------------
-# Parallel collection helpers
+# Streaming embed + upsert
 # ---------------------------------------------------------------------------
 
-def collect_parallel(futures_map, label: str):
+def embed_and_upsert(model, device, docs, ids, metas, embed_batch_size, collection):
     """
-    Drain a dict of {future: name} as futures complete.
-    Returns (all_ids, all_docs, all_metas).
-    Prints per-file progress, errors, and a summary line.
+    Embed docs in small batches and upsert to ChromaDB immediately.
+    Never holds more than embed_batch_size embeddings in memory at once.
+    Frees GPU cache after each batch when running on CUDA.
     """
-    all_ids, all_docs, all_metas = [], [], []
-    errors = 0
-    total = len(futures_map)
-    done = 0
+    n = len(docs)
+    n_batches = (n + embed_batch_size - 1) // embed_batch_size
 
-    for future in as_completed(futures_map):
-        name = futures_map[future]
-        ids, docs, metas, err = future.result()
-        done += 1
-        if err:
-            log(f"  [{done}/{total}] SKIP {name}: {err.split(':', 1)[-1].strip()}")
-            errors += 1
-        else:
-            log(f"  [{done}/{total}] {name}  ({len(docs)} chunks)")
-        all_ids.extend(ids)
-        all_docs.extend(docs)
-        all_metas.extend(metas)
+    for batch_idx, i in enumerate(range(0, n, embed_batch_size), 1):
+        b_docs  = docs[i:i + embed_batch_size]
+        b_ids   = ids[i:i + embed_batch_size]
+        b_metas = metas[i:i + embed_batch_size]
 
-    log(f"{label}: {len(all_docs)} chunks total ({errors} skipped)")
-    return all_ids, all_docs, all_metas
+        embeddings = model.encode(b_docs, normalize_embeddings=True, batch_size=embed_batch_size)
+        collection.add(ids=b_ids, documents=b_docs, embeddings=embeddings.tolist(), metadatas=b_metas)
+
+        del embeddings
+        if device == "cuda":
+            torch.cuda.empty_cache()
+
+        if n_batches > 1:
+            log(f"      batch {batch_idx}/{n_batches}  ({min(i + embed_batch_size, n)}/{n} chunks)")
 
 
 # ---------------------------------------------------------------------------
@@ -277,22 +249,30 @@ def collect_parallel(futures_map, label: str):
 def main():
     config = load_config()
 
-    vault_path = Path(config["vault_path"]).expanduser().resolve()
-    index_path = config.get("index_path", "./chroma_db")
+    vault_path      = Path(config["vault_path"]).expanduser().resolve()
+    index_path      = config.get("index_path", "./chroma_db")
     collection_name = config.get("collection_name", "obsidian_markdown")
-    max_chars = int(config.get("chunk_max_chars", 1800))
-    overlap = int(config.get("chunk_overlap_chars", 250))
-    model_name = config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
+    max_chars       = int(config.get("chunk_max_chars", 1200))
+    overlap         = int(config.get("chunk_overlap_chars", 150))
+    model_name      = config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
+    embed_batch     = int(config.get("embedding_batch_size", 16))
+    md_workers      = int(config.get("markdown_workers", 1))
+    pdf_workers     = int(config.get("pdf_workers", 1))
 
     if not vault_path.exists():
         raise RuntimeError(f"Vault path does not exist: {vault_path}")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    cpu_workers = int(config.get("embedding_workers", 2))
 
     log(f"Vault: {vault_path}")
-    log(f"Embedding model: {model_name}")
-    log(f"Device: {device}" + (f" ({torch.cuda.get_device_name(0)})" if device == "cuda" else f" ({cpu_workers} worker(s), {_IO_WORKERS} I/O threads)"))
+    log(f"Embedding model: {model_name}  |  device: {device}" +
+        (f" ({torch.cuda.get_device_name(0)})" if device == "cuda" else ""))
+    log(f"Chunk max chars: {max_chars}  |  overlap: {overlap}")
+    log(f"Embed batch size: {embed_batch}  |  md_workers: {md_workers}  |  pdf_workers: {pdf_workers}")
+
+    log("Loading embedding model...")
+    model = SentenceTransformer(model_name, device=device)
+    log("Model loaded.")
 
     client = chromadb.PersistentClient(
         path=index_path,
@@ -306,26 +286,38 @@ def main():
         pass
 
     collection = client.create_collection(name=collection_name)
+    total_chunks = 0
 
-    all_ids, all_docs, all_metas = [], [], []
-
-    # --- Markdown files (parallel) ---
+    # --- Markdown files ---
+    # I/O extraction runs in up to md_workers threads; embedding + upsert are
+    # always serial in the main thread so peak memory is bounded to one file
+    # at a time.
     md_files = [f for f in sorted(vault_path.rglob("*.md")) if not should_exclude(f, vault_path, config)]
-    log(f"Markdown files to index: {len(md_files)}")
+    log(f"\nMarkdown files to index: {len(md_files)}")
 
-    with ThreadPoolExecutor(max_workers=_IO_WORKERS) as pool:
-        futures = {
-            pool.submit(extract_md_file, f, vault_path, config, max_chars, overlap): f.name
+    with ThreadPoolExecutor(max_workers=md_workers) as pool:
+        futures = [
+            (pool.submit(extract_md_file, f, vault_path, config, max_chars, overlap), f)
             for f in md_files
-        }
-        ids, docs, metas = collect_parallel(futures, "Markdown")
-        all_ids.extend(ids)
-        all_docs.extend(docs)
-        all_metas.extend(metas)
+        ]
+        for file_idx, (future, md_file) in enumerate(futures, 1):
+            ids, docs, metas, err = future.result()
+            if err:
+                log(f"  [{file_idx}/{len(md_files)}] SKIP {md_file.name}: {err.split(':', 1)[-1].strip()}")
+                continue
+            if not docs:
+                continue
+            log(f"  [{file_idx}/{len(md_files)}] {md_file.name}  ({len(docs)} chunks)")
+            embed_and_upsert(model, device, docs, ids, metas, embed_batch, collection)
+            total_chunks += len(docs)
+            del ids, docs, metas
+            gc.collect()
 
-    # --- PDF sources (parallel per source) ---
+    log(f"Markdown complete: {total_chunks} chunks indexed")
+
+    # --- PDF sources ---
     for pdf_source in config.get("pdf_sources", []):
-        pdf_dir = Path(pdf_source["path"]).expanduser().resolve()
+        pdf_dir     = Path(pdf_source["path"]).expanduser().resolve()
         source_type = pdf_source.get("type", "resource")
 
         if not pdf_dir.exists():
@@ -333,65 +325,33 @@ def main():
             continue
 
         pdf_files = sorted(pdf_dir.glob("*.pdf"))
-        log(f"PDF source [{source_type}]: {len(pdf_files)} files — {pdf_dir.name}")
+        log(f"\nPDF source [{source_type}]: {len(pdf_files)} files — {pdf_dir.name}")
+        source_chunks = 0
 
-        with ThreadPoolExecutor(max_workers=_IO_WORKERS) as pool:
-            futures = {
-                pool.submit(extract_pdf_file, f, source_type, max_chars, overlap): f.name
+        with ThreadPoolExecutor(max_workers=pdf_workers) as pool:
+            futures = [
+                (pool.submit(extract_pdf_file, f, source_type, max_chars, overlap), f)
                 for f in pdf_files
-            }
-            ids, docs, metas = collect_parallel(futures, f"  [{source_type}]")
-            all_ids.extend(ids)
-            all_docs.extend(docs)
-            all_metas.extend(metas)
+            ]
+            for file_idx, (future, pdf_file) in enumerate(futures, 1):
+                ids, docs, metas, err = future.result()
+                if err:
+                    log(f"  [{file_idx}/{len(pdf_files)}] SKIP {pdf_file.name}: {err.split(':', 1)[-1].strip()}")
+                    continue
+                if not docs:
+                    continue
+                log(f"  [{file_idx}/{len(pdf_files)}] {pdf_file.name}  ({len(docs)} chunks)")
+                embed_and_upsert(model, device, docs, ids, metas, embed_batch, collection)
+                total_chunks  += len(docs)
+                source_chunks += len(docs)
+                del ids, docs, metas
+                gc.collect()
+                if device == "cuda":
+                    torch.cuda.empty_cache()
 
-    log(f"Total chunks (MD + PDF): {len(all_docs)}")
+        log(f"  [{source_type}] complete: {source_chunks} chunks indexed")
 
-    if not all_docs:
-        raise RuntimeError("No documents found to index.")
-
-    # --- Embed and upsert ---
-    if device == "cuda":
-        # GPU path: single process, large batches — GPU handles parallelism internally.
-        # encode_multi_process() is intentionally avoided: Jetson does not support
-        # CUDA IPC (uses NvSCI instead) so cross-process tensor sharing fails.
-        log(f"Embedding {len(all_docs)} chunks on GPU (single process, batch=512)...")
-        model = SentenceTransformer(model_name, device="cuda")
-        all_embeddings = model.encode(
-            all_docs,
-            normalize_embeddings=True,
-            batch_size=512,
-            show_progress_bar=True,
-        )
-    else:
-        # CPU path: ProcessPoolExecutor — each worker loads the model once
-        # (initializer) and is fed small batches, with OMP_NUM_THREADS=1
-        # so N workers each own exactly 1 core.
-        embed_batch_size = 256
-        batches = [all_docs[i:i + embed_batch_size] for i in range(0, len(all_docs), embed_batch_size)]
-        log(f"Embedding {len(all_docs)} chunks across {cpu_workers} CPU worker(s) ({len(batches)} batches)...")
-        with ProcessPoolExecutor(
-            max_workers=cpu_workers,
-            initializer=_init_worker,
-            initargs=(model_name,),
-        ) as executor:
-            embedding_chunks = list(executor.map(_embed_batch, batches))
-        all_embeddings = np.vstack(embedding_chunks)
-
-    log("Embedding done. Upserting to ChromaDB...")
-
-    upsert_batch = 512  # ChromaDB handles larger batches fine for upsert
-    for start in range(0, len(all_docs), upsert_batch):
-        end = start + upsert_batch
-        collection.add(
-            ids=all_ids[start:end],
-            documents=all_docs[start:end],
-            embeddings=all_embeddings[start:end].tolist(),
-            metadatas=all_metas[start:end],
-        )
-        log(f"Upserted {min(end, len(all_docs))}/{len(all_docs)} chunks")
-
-    log("Indexing complete.")
+    log(f"\nIndexing complete. Total chunks: {total_chunks}")
 
 
 if __name__ == "__main__":

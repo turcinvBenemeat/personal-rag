@@ -54,10 +54,13 @@ personal-rag/
 - `collection_name`: `obsidian_markdown`
 - `exclude_dirs`: `.obsidian`, `.trash`, `Resources/_catalog`, `Attachments`, `Archive`, `.git`
 - `exclude_files`: `.DS_Store`, `CLAUDE.md`
-- `chunk_max_chars`: 1800
-- `chunk_overlap_chars`: 250
+- `chunk_max_chars`: `1200` — smaller chunks reduce per-file peak RAM; increase on high-RAM machines
+- `chunk_overlap_chars`: `150`
 - `embedding_model`: `sentence-transformers/all-MiniLM-L6-v2`
-- `embedding_workers`: `2` — CPU fallback only (ignored when CUDA is available); reduce if RAM is tight
+- `embedding_batch_size`: `16` — chunks per `model.encode()` call; keep small on Jetson (8 GB unified RAM)
+- `markdown_workers`: `1` — threads for parallel MD file extraction (I/O bound); 1 = sequential
+- `pdf_workers`: `1` — threads for parallel PDF extraction; keep at 1 on Jetson
+- `embedding_workers`: `1` — CPU ProcessPoolExecutor workers (legacy, not used by streaming indexer; reserved)
 - `pdf_sources`: list of `{path, type}` entries for PDF directories (`book`, `resource`)
 
 ## ChromaDB state
@@ -90,17 +93,20 @@ Keep this. Do not remove when upgrading chromadb until confirmed fixed.
 
 ## Indexing logic (index_obsidian.py)
 
-**Extraction phase — parallel (16 I/O threads):**
-1. Markdown: reads all `.md` files via `rglob`, skips excluded dirs/files, strips `{{...}}` Obsidian template vars before YAML parsing, splits by heading, chunks by character count with overlap
-2. PDF: reads each `.pdf` from configured `pdf_sources`, batches pages into text blocks, chunks by character count; prefers embedded PDF title metadata over filename
+**Pipeline is fully streaming — no global accumulation of chunks in RAM.**
+Each file is processed end-to-end (extract → embed → upsert → free) before the next file starts.
 
-**Embedding phase — auto-selects backend at startup:**
-3. Detects `torch.cuda.is_available()` at runtime:
-   - **CUDA:** single-process `model.encode(..., device="cuda", batch_size=512)`; GPU handles parallelism internally. `encode_multi_process()` is intentionally avoided — Jetson does not support CUDA IPC (uses NvSCI instead)
-   - **CPU:** `ProcessPoolExecutor` with `embedding_workers` processes (from config, default `2`); each worker loads the model once via `initializer=_init_worker` and sets `OMP_NUM_THREADS=1` to own exactly one core without contention
+**Per-file loop:**
+1. **Extract** — I/O runs in a `ThreadPoolExecutor` (`markdown_workers` or `pdf_workers` threads):
+   - Markdown: reads `.md` via `rglob`, skips excluded dirs/files, strips `{{...}}` Obsidian template vars, splits by heading, chunks by char count with overlap
+   - PDF: reads pages into text blocks, chunks by char count; prefers embedded PDF title metadata over filename
+2. **Embed** — always runs in the main thread (never multiprocess); `model.encode()` called with `embedding_batch_size` chunks at a time; `torch.cuda.empty_cache()` after each batch on CUDA
+3. **Upsert** — each batch is written to ChromaDB immediately after embedding; no full-vault buffer
+4. **Free** — `del ids/docs/metas` + `gc.collect()` after each file; `torch.cuda.empty_cache()` after each PDF
 
-**Upsert phase:**
-5. Upserts to ChromaDB in batches of 512 (delete-then-recreate collection)
+**Model loading:** `SentenceTransformer` loaded once at startup, auto-selects `device="cuda"` or `device="cpu"`. `encode_multi_process()` is intentionally avoided — Jetson does not support CUDA IPC (uses NvSCI instead).
+
+**Collection lifecycle:** delete-then-recreate at the start of every full reindex.
 
 **Stable IDs:** SHA-256 of `(path, section_index, chunk_index, chunk[:80])`
 
@@ -114,7 +120,7 @@ Keep this. Do not remove when upgrading chromadb until confirmed fixed.
   pip install -r requirements-jetson.txt
   ```
 - **Why not `encode_multi_process`:** Jetson uses NvSCI IPC, not CUDA IPC — cross-process tensor sharing fails. Single-process GPU encoding is the correct path.
-- **RAM:** 8 GB unified (CPU + GPU share the same pool). Set `embedding_workers: 1` in `config.yaml` when running on Jetson to keep CPU fallback to a single process — each process loads the model (~100 MB) so spawning multiple workers wastes significant RAM. On CUDA, the value is ignored entirely.
+- **RAM:** 8 GB unified (CPU + GPU share the same pool). The streaming indexer avoids global chunk accumulation — peak RAM is bounded to one file's chunks at a time. Keep `embedding_batch_size: 16`, `markdown_workers: 1`, `pdf_workers: 1` to stay within budget.
 - **ChromaDB:** `0.6.3` publishes `manylinux_2_17_aarch64` wheels — no changes needed.
 
 ## Query logic (query_obsidian.py)
