@@ -1,14 +1,14 @@
+"""Streaming indexer — Obsidian Markdown + PDF → ChromaDB."""
+
 import gc
 import hashlib
-import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from utils import load_config  # sets telemetry env var and patches posthog before chromadb loads
+from .utils import load_config  # sets telemetry env var and patches posthog before chromadb loads
 
 import torch
-
 import chromadb
 import frontmatter
 from pypdf import PdfReader
@@ -22,15 +22,12 @@ def log(msg: str) -> None:
 
 def should_exclude(path: Path, vault_path: Path, config: dict) -> bool:
     rel = path.relative_to(vault_path).as_posix()
-
     for excluded in config.get("exclude_dirs", []):
         excluded = excluded.strip("/")
         if rel == excluded or rel.startswith(excluded + "/"):
             return True
-
     if path.name in config.get("exclude_files", []):
         return True
-
     return False
 
 
@@ -42,7 +39,6 @@ def split_by_headings(text: str):
     sections = []
     current_heading = "Document"
     current_lines = []
-
     for line in text.splitlines():
         if line.startswith("#"):
             if current_lines:
@@ -51,34 +47,25 @@ def split_by_headings(text: str):
             current_heading = line.strip("#").strip() or "Document"
         else:
             current_lines.append(line)
-
     if current_lines:
         sections.append((current_heading, "\n".join(current_lines).strip()))
-
     return [(h, t) for h, t in sections if t.strip()]
 
 
 def chunk_text(text: str, max_chars: int, overlap: int):
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
-
     if len(text) <= max_chars:
         return [text]
-
     chunks = []
     start = 0
-
     while start < len(text):
         end = min(start + max_chars, len(text))
         chunk = text[start:end].strip()
-
         if chunk:
             chunks.append(chunk)
-
         if end >= len(text):
             break
-
         start = max(0, end - overlap)
-
     return chunks
 
 
@@ -96,13 +83,12 @@ def clean_pdf_title(filename: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Per-file extraction functions (I/O-bound, safe to run in threads)
+# Per-file extraction (I/O-bound, safe to run in threads)
 # ---------------------------------------------------------------------------
 
 def extract_md_file(md_file: Path, vault_path: Path, config: dict, max_chars: int, overlap: int):
-    """Parse one Markdown file and return (ids, documents, metadatas, error)."""
+    """Parse one Markdown file → (ids, documents, metadatas, error)."""
     rel_path = md_file.relative_to(vault_path).as_posix()
-
     try:
         raw = md_file.read_text(encoding="utf-8", errors="ignore")
         raw = re.sub(r"\{\{[^}]+\}\}", "", raw)  # strip unresolved Obsidian template vars
@@ -120,36 +106,26 @@ def extract_md_file(md_file: Path, vault_path: Path, config: dict, max_chars: in
     domain = str(meta.get("domain") or "")
     status = str(meta.get("status") or "")
     source = str(meta.get("source") or "")
-
     tags_value = meta.get("tags") or []
     tags = ", ".join(str(t) for t in tags_value) if isinstance(tags_value, list) else str(tags_value)
-
     wikilinks = ", ".join(extract_wikilinks(body))
     sections = split_by_headings(body)
 
     ids, documents, metadatas = [], [], []
-
     for section_index, (heading, section_text) in enumerate(sections):
         for chunk_index, chunk in enumerate(chunk_text(section_text, max_chars=max_chars, overlap=overlap)):
             ids.append(stable_id(rel_path, section_index, chunk_index, chunk[:80]))
             documents.append(chunk)
             metadatas.append({
-                "path": rel_path,
-                "title": title,
-                "heading": heading,
-                "type": note_type,
-                "domain": domain,
-                "status": status,
-                "source": source,
-                "tags": tags,
-                "wikilinks": wikilinks,
+                "path": rel_path, "title": title, "heading": heading,
+                "type": note_type, "domain": domain, "status": status,
+                "source": source, "tags": tags, "wikilinks": wikilinks,
             })
-
     return ids, documents, metadatas, None
 
 
 def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: int):
-    """Extract text from one PDF and return (ids, documents, metadatas, error)."""
+    """Extract text from one PDF → (ids, documents, metadatas, error)."""
     try:
         reader = PdfReader(str(pdf_path))
     except Exception as exc:
@@ -168,15 +144,9 @@ def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: 
             ids.append(stable_id(str(pdf_path), block_start, chunk_index, chunk[:80]))
             documents.append(chunk)
             metadatas.append({
-                "path": pdf_path.name,
-                "title": title,
-                "heading": heading,
-                "type": source_type,
-                "domain": "",
-                "status": "",
-                "source": "pdf",
-                "tags": "",
-                "wikilinks": "",
+                "path": pdf_path.name, "title": title, "heading": heading,
+                "type": source_type, "domain": "", "status": "",
+                "source": "pdf", "tags": "", "wikilinks": "",
             })
 
     for page_num, page in enumerate(reader.pages, 1):
@@ -185,12 +155,9 @@ def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: 
             page_text = page_text.encode("utf-8", errors="replace").decode("utf-8")
         except Exception:
             continue
-
         if len(page_text) < 40:
             continue
-
         block_text += "\n\n" + page_text
-
         if len(block_text) >= max_chars:
             flush_block(block_text, block_start, page_num)
             block_text = ""
@@ -207,32 +174,24 @@ def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: 
 # ---------------------------------------------------------------------------
 
 def embed_and_upsert(model, device, docs, ids, metas, embed_batch_size, collection):
-    """
-    Embed docs in small batches and upsert to ChromaDB immediately.
-    Never holds more than embed_batch_size embeddings in memory at once.
-    Frees GPU cache after each batch when running on CUDA.
-    """
+    """Embed in small batches and upsert immediately; never accumulates in RAM."""
     n = len(docs)
     n_batches = (n + embed_batch_size - 1) // embed_batch_size
-
     for batch_idx, i in enumerate(range(0, n, embed_batch_size), 1):
         b_docs  = docs[i:i + embed_batch_size]
         b_ids   = ids[i:i + embed_batch_size]
         b_metas = metas[i:i + embed_batch_size]
-
         embeddings = model.encode(b_docs, normalize_embeddings=True, batch_size=embed_batch_size)
         collection.add(ids=b_ids, documents=b_docs, embeddings=embeddings.tolist(), metadatas=b_metas)
-
         del embeddings
         if device == "cuda":
             torch.cuda.empty_cache()
-
         if n_batches > 1:
             log(f"      batch {batch_idx}/{n_batches}  ({min(i + embed_batch_size, n)}/{n} chunks)")
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Entry point
 # ---------------------------------------------------------------------------
 
 def main():
@@ -267,7 +226,6 @@ def main():
         path=index_path,
         settings=chromadb.Settings(anonymized_telemetry=False),
     )
-
     try:
         client.delete_collection(collection_name)
         log(f"Deleted existing collection: {collection_name}")
@@ -277,18 +235,12 @@ def main():
     collection = client.create_collection(name=collection_name)
     total_chunks = 0
 
-    # --- Markdown files ---
-    # I/O extraction runs in up to md_workers threads; embedding + upsert are
-    # always serial in the main thread so peak memory is bounded to one file
-    # at a time.
+    # --- Markdown ---
     md_files = [f for f in sorted(vault_path.rglob("*.md")) if not should_exclude(f, vault_path, config)]
     log(f"\nMarkdown files to index: {len(md_files)}")
 
     with ThreadPoolExecutor(max_workers=md_workers) as pool:
-        futures = [
-            (pool.submit(extract_md_file, f, vault_path, config, max_chars, overlap), f)
-            for f in md_files
-        ]
+        futures = [(pool.submit(extract_md_file, f, vault_path, config, max_chars, overlap), f) for f in md_files]
         for file_idx, (future, md_file) in enumerate(futures, 1):
             ids, docs, metas, err = future.result()
             if err:
@@ -318,10 +270,7 @@ def main():
         source_chunks = 0
 
         with ThreadPoolExecutor(max_workers=pdf_workers) as pool:
-            futures = [
-                (pool.submit(extract_pdf_file, f, source_type, max_chars, overlap), f)
-                for f in pdf_files
-            ]
+            futures = [(pool.submit(extract_pdf_file, f, source_type, max_chars, overlap), f) for f in pdf_files]
             for file_idx, (future, pdf_file) in enumerate(futures, 1):
                 ids, docs, metas, err = future.result()
                 if err:

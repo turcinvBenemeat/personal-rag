@@ -1,10 +1,10 @@
 # personal-rag — Jetson Orin Nano Super (JetPack 6.2, CUDA 12.6)
 #
-# Run ON the Jetson. Requires NVIDIA Container Toolkit installed.
+# Run ON the Jetson. Requires NVIDIA Container Toolkit.
 #
 # Usage:
-#   docker compose -f docker-compose.jetson.yml run --rm rag python index_obsidian.py
-#   docker compose -f docker-compose.jetson.yml run --rm rag python query_obsidian.py "your question"
+#   docker compose -f docker/docker-compose.jetson.yml run --rm rag python -m rag.indexer
+#   docker compose -f docker/docker-compose.jetson.yml run --rm rag python -m rag.query "your question"
 #
 # Or use the Makefile shortcuts:
 #   make build-jetson
@@ -14,8 +14,8 @@
 services:
   rag:
     build:
-      context: .
-      dockerfile: Dockerfile.jetson
+      context: ..
+      dockerfile: docker/Dockerfile.jetson
     image: personal-rag:jetson
     runtime: nvidia
     volumes:

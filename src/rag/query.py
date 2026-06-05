@@ -1,8 +1,9 @@
+"""Semantic query CLI with metadata filters and JSON output."""
+
 import argparse
 import json
-import sys
 
-from utils import load_config  # sets telemetry env var and patches posthog before chromadb loads
+from .utils import load_config  # sets telemetry env var and patches posthog before chromadb loads
 
 import chromadb
 from sentence_transformers import SentenceTransformer
@@ -29,41 +30,30 @@ def main():
         description="Semantic query over indexed Obsidian vault and PDFs.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""examples:
-  %(prog)s "What do I know about Kubernetes?"
-  %(prog)s "secrets in Python" -n 12
-  %(prog)s "Kubernetes" --domain DevOps
-  %(prog)s "book recommendations" --source pdf --type book
-  %(prog)s "RAG pipeline" --json
+  rag-query "What do I know about Kubernetes?"
+  rag-query "secrets in Python" -n 12
+  rag-query "Kubernetes" --domain DevOps
+  rag-query "book recommendations" --source pdf --type book
+  rag-query "RAG pipeline" --json
 """,
     )
-    parser.add_argument("query", nargs="+", help="Query text (quoted or unquoted)")
-    parser.add_argument(
-        "-n", "--n-results", type=int, default=8, metavar="N",
-        help="Number of results to return (default: 8)",
-    )
-    parser.add_argument(
-        "--domain", default=None,
-        help="Filter by domain metadata (e.g. DevOps, 'Software Engineering')",
-    )
-    parser.add_argument(
-        "--type", dest="type_", default=None,
-        help="Filter by type metadata (e.g. book, resource, Knowledge)",
-    )
-    parser.add_argument(
-        "--source", default=None,
-        help="Filter by source metadata (e.g. pdf)",
-    )
-    parser.add_argument(
-        "--json", dest="output_json", action="store_true",
-        help="Output results as a JSON array (useful for piping)",
-    )
+    parser.add_argument("query", nargs="+", help="Query text")
+    parser.add_argument("-n", "--n-results", type=int, default=8, metavar="N",
+                        help="Number of results to return (default: 8)")
+    parser.add_argument("--domain", default=None,
+                        help="Filter by domain metadata (e.g. DevOps, 'Software Engineering')")
+    parser.add_argument("--type", dest="type_", default=None,
+                        help="Filter by type metadata (e.g. book, resource, Knowledge)")
+    parser.add_argument("--source", default=None,
+                        help="Filter by source metadata (e.g. pdf)")
+    parser.add_argument("--json", dest="output_json", action="store_true",
+                        help="Output results as a JSON array")
     args = parser.parse_args()
 
     query = " ".join(args.query)
-
     config = load_config()
-    model_name = config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
-    index_path = config.get("index_path", "./chroma_db")
+    model_name      = config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
+    index_path      = config.get("index_path", "./chroma_db")
     collection_name = config.get("collection_name", "obsidian_markdown")
 
     model = SentenceTransformer(model_name)
@@ -85,9 +75,8 @@ def main():
         query_kwargs["where"] = where
 
     results = collection.query(**query_kwargs)
-
-    docs = results["documents"][0]
-    metas = results["metadatas"][0]
+    docs      = results["documents"][0]
+    metas     = results["metadatas"][0]
     distances = results["distances"][0]
 
     if args.output_json:
@@ -106,17 +95,10 @@ def main():
 
     for i, (doc, meta, distance) in enumerate(zip(docs, metas, distances), start=1):
         print("=" * 80)
-        print(str(i) + ". " + str(meta.get("title")) + " - " + str(meta.get("heading")))
-        print("Path: " + str(meta.get("path")))
-        print(
-            "Type: "
-            + str(meta.get("type"))
-            + " | Domain: "
-            + str(meta.get("domain"))
-            + " | Status: "
-            + str(meta.get("status"))
-        )
-        print("Distance: " + format(distance, ".4f"))
+        print(f"{i}. {meta.get('title')} - {meta.get('heading')}")
+        print(f"Path: {meta.get('path')}")
+        print(f"Type: {meta.get('type')} | Domain: {meta.get('domain')} | Status: {meta.get('status')}")
+        print(f"Distance: {distance:.4f}")
         print("-" * 80)
         print(doc[:1200].strip())
         print()

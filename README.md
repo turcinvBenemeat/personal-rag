@@ -21,8 +21,11 @@ All content is indexed locally. Nothing is sent to any cloud service.
 
 ```bash
 cd personal-rag
-uv venv .venv
-uv pip install -r requirements.txt
+make install
+# equivalent to:
+#   uv venv .venv
+#   uv pip install -r requirements.txt
+#   uv pip install -e . --no-deps
 ```
 
 ### Jetson Orin Nano Super (JetPack 6.2, CUDA 12.6)
@@ -32,6 +35,7 @@ PyTorch must come from the Jetson AI Lab index — standard PyPI wheels are x86 
 ```bash
 pip install torch torchvision --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
 pip install -r requirements-jetson.txt
+pip install -e . --no-deps
 ```
 
 ## Configuration
@@ -59,7 +63,8 @@ All other settings (chunk size, embedding model, excluded dirs) have sensible de
 ### Index your content
 
 ```bash
-.venv/bin/python index_obsidian.py
+make index
+# or: .venv/bin/rag-index
 ```
 
 Indexing is fully streaming — each file is extracted, embedded, and upserted to ChromaDB before the next file starts. No global chunk accumulation in RAM. Uses GPU if CUDA is available, otherwise CPU.
@@ -69,16 +74,16 @@ Expect ~5–10 minutes for a large vault + book library on first run.
 ### Query
 
 ```bash
-.venv/bin/python query_obsidian.py "What do I know about Kubernetes?"
-.venv/bin/python query_obsidian.py "How should I handle secrets in Python?" -n 12
+make query Q="What do I know about Kubernetes?"
+# or: .venv/bin/rag-query "your question" -n 12
 ```
 
 **Metadata filters** narrow results to a specific domain, type, or source:
 
 ```bash
-.venv/bin/python query_obsidian.py "container orchestration" --domain DevOps
-.venv/bin/python query_obsidian.py "neural networks" --source pdf --type book
-.venv/bin/python query_obsidian.py "RAG pipeline" --json
+.venv/bin/rag-query "container orchestration" --domain DevOps
+.venv/bin/rag-query "neural networks" --source pdf --type book
+.venv/bin/rag-query "RAG pipeline" --json
 ```
 
 Pass `--help` to see all options.
@@ -93,8 +98,9 @@ Pass `--help` to see all options.
 ### Smoke test retrieval quality
 
 ```bash
-.venv/bin/python test_queries.py           # run all 13 test queries
-.venv/bin/python test_queries.py devops    # filter by keyword
+make test
+make test K=devops    # filter by keyword
+# or: .venv/bin/python tests/test_queries.py [keyword]
 ```
 
 Run this after every reindex to catch quality regressions. Results below distance 0.75 are marked OK; above are marked WEAK.
@@ -136,16 +142,16 @@ cp .env.example .env
 
 ```bash
 make build
-make docker-index                           # index vault + PDFs
-make docker-query Q="What is K3s?"          # query
-make docker-test                            # smoke tests
+make docker-index
+make docker-query Q="What is K3s?"
+make docker-test
 ```
 
 Or directly:
 
 ```bash
-docker compose run --rm rag python index_obsidian.py
-docker compose run --rm rag python query_obsidian.py "your question" --domain DevOps
+docker compose -f docker/docker-compose.yml run --rm rag python -m rag.indexer
+docker compose -f docker/docker-compose.yml run --rm rag python -m rag.query "your question" --domain DevOps
 ```
 
 ### Jetson Orin Nano Super (JetPack 6.2)
@@ -163,8 +169,8 @@ make jetson-query Q="What do I know about bioprocessing?"
 Or directly:
 
 ```bash
-docker compose -f docker-compose.jetson.yml run --rm rag python index_obsidian.py
-docker compose -f docker-compose.jetson.yml run --rm rag python query_obsidian.py "your question"
+docker compose -f docker/docker-compose.jetson.yml run --rm rag python -m rag.indexer
+docker compose -f docker/docker-compose.jetson.yml run --rm rag python -m rag.query "your question"
 ```
 
 The first `build-jetson` will be slow (~1.5 GB PyTorch layer). Subsequent builds reuse the cached layer.
@@ -211,19 +217,20 @@ PDF books & resources  ─┘         │
 
 ## Project files
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
-| `utils.py` | Shared helpers — telemetry suppression, `load_config()`, env var path overrides |
-| `index_obsidian.py` | Streaming indexer — MD + PDF → ChromaDB |
-| `query_obsidian.py` | Semantic query CLI with metadata filters and JSON output |
-| `test_queries.py` | 13-query retrieval smoke tests across all vault domains |
+| `src/rag/utils.py` | Shared helpers — telemetry suppression, `load_config()`, env var overrides |
+| `src/rag/indexer.py` | Streaming indexer — MD + PDF → ChromaDB; CLI entry: `rag-index` |
+| `src/rag/query.py` | Semantic query CLI with metadata filters and JSON output; CLI entry: `rag-query` |
+| `tests/test_queries.py` | 13-query retrieval smoke tests across all vault domains |
+| `docker/Dockerfile` | x86 / macOS container image |
+| `docker/Dockerfile.jetson` | Jetson JetPack 6.2 container image (build on Jetson) |
+| `docker/docker-compose.yml` | x86 Compose file with volume mounts |
+| `docker/docker-compose.jetson.yml` | Jetson Compose file (`runtime: nvidia`) |
 | `config.yaml` | Vault paths, PDF sources, chunk settings |
+| `pyproject.toml` | Package definition and `rag-index` / `rag-query` entry points |
 | `.env.example` | Template for path overrides via environment variables |
 | `Makefile` | Shortcuts for local and Docker workflows |
-| `Dockerfile` | x86 / macOS container image |
-| `Dockerfile.jetson` | Jetson JetPack 6.2 container image (build on Jetson) |
-| `docker-compose.yml` | x86 Compose file with volume mounts |
-| `docker-compose.jetson.yml` | Jetson Compose file (`runtime: nvidia`) |
 | `requirements.txt` | Full pinned dependency lockfile (macOS/x86) |
 | `requirements-direct.txt` | Direct dependencies only (use with `uv pip compile` to regenerate lockfile) |
 | `requirements-jetson.txt` | Direct dependencies for Jetson JetPack 6.2 (aarch64, CUDA 12.6) |

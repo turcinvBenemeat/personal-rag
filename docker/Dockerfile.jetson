@@ -1,0 +1,43 @@
+# personal-rag — NVIDIA Jetson Orin Nano Super (JetPack 6.2, aarch64, CUDA 12.6)
+#
+# IMPORTANT: Build and run ON the Jetson itself.
+# PyTorch wheels from pypi.jetson-ai-lab.io are aarch64-only.
+#
+# Build from the project root:
+#   docker build -f docker/Dockerfile.jetson -t personal-rag:jetson .
+#   make build-jetson
+#
+# Requires NVIDIA Container Toolkit:
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-dev python3-pip gcc \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.10 /usr/local/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/local/bin/pip
+
+WORKDIR /app
+
+# PyTorch must come first — standard PyPI wheels are x86 only.
+# This layer is ~1.5 GB and is cached after the first build.
+RUN pip install --no-cache-dir torch torchvision \
+    --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+
+COPY requirements-jetson.txt pyproject.toml ./
+RUN pip install --no-cache-dir -r requirements-jetson.txt \
+ && pip install --no-cache-dir -e . --no-deps
+
+COPY src/ ./src/
+COPY tests/ ./tests/
+COPY config.yaml .env.example ./
+
+ENV HF_HOME=/data/hf-cache
+ENV TRANSFORMERS_CACHE=/data/hf-cache
+ENV RAG_INDEX_PATH=/data/chroma
+
+ENTRYPOINT ["python", "-m"]
+CMD ["rag.query", "--help"]

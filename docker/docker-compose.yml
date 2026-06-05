@@ -1,34 +1,29 @@
 # personal-rag — x86 / macOS
 #
-# Prerequisites: copy .env.example to .env and set your paths.
+# Prerequisites: copy .env.example to .env and set RAG_VAULT_PATH,
+# RAG_PDF_BOOKS_PATH, RAG_PDF_RESOURCES_PATH.
 #
 # Usage:
-#   docker compose run --rm rag python index_obsidian.py
-#   docker compose run --rm rag python query_obsidian.py "your question"
-#   docker compose run --rm rag python query_obsidian.py "Kubernetes" --domain DevOps
-#   docker compose run --rm rag python test_queries.py
+#   docker compose -f docker/docker-compose.yml run --rm rag python -m rag.indexer
+#   docker compose -f docker/docker-compose.yml run --rm rag python -m rag.query "your question"
 #
 # Or use the Makefile shortcuts:
 #   make docker-index
 #   make docker-query Q="your question"
-#   make docker-test
 
 services:
   rag:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     image: personal-rag:latest
     volumes:
-      # Persistent data — survives container restarts
       - chroma:/data/chroma
       - hf-cache:/data/hf-cache
-      # Source content — read-only; paths come from .env on the host
       - ${RAG_VAULT_PATH:-/tmp}:/vault:ro
       - ${RAG_PDF_BOOKS_PATH:-/tmp}:/books:ro
       - ${RAG_PDF_RESOURCES_PATH:-/tmp}:/resources:ro
     environment:
-      # Inside the container these fixed paths override config.yaml
       RAG_VAULT_PATH: /vault
       RAG_PDF_BOOKS_PATH: /books
       RAG_PDF_RESOURCES_PATH: /resources
