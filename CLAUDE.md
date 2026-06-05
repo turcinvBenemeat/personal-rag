@@ -2,6 +2,13 @@
 
 Local retrieval index for an Obsidian knowledge vault + PDF books and resources stored in Google Drive. Embeds content as vector chunks in ChromaDB and retrieves by semantic query.
 
+## Branches
+
+| Branch | Purpose |
+|---|---|
+| `main` | x86 CPU — `ProcessPoolExecutor` with `OMP_NUM_THREADS=1` per worker |
+| `feature/jetson` | NVIDIA Jetson Orin Nano Super — auto-detects CUDA, uses single-process GPU encoding |
+
 ## What this project does
 
 - Indexes Obsidian Markdown notes and PDF books/resources into a local ChromaDB collection
@@ -35,15 +42,16 @@ Do not use bare `python` or `python3` — the Conda base environment will be pic
 
 ```
 personal-rag/
-├── .venv/               # local virtualenv — never commit
-├── chroma_db/           # ChromaDB data — never commit
-├── config.yaml          # vault path, pdf sources, model, chunk settings
-├── index_obsidian.py    # parallel indexer (MD + PDF → ChromaDB)
-├── query_obsidian.py    # semantic query CLI
-├── test_queries.py      # retrieval smoke tests across all domains
-├── requirements.txt     # pinned dependencies
-├── README.md            # setup and usage guide
-└── CLAUDE.md            # this file
+├── .venv/                    # local virtualenv — never commit
+├── chroma_db/                # ChromaDB data — never commit
+├── config.yaml               # vault path, pdf sources, model, chunk settings
+├── index_obsidian.py         # parallel indexer (MD + PDF → ChromaDB)
+├── query_obsidian.py         # semantic query CLI
+├── test_queries.py           # retrieval smoke tests across all domains
+├── requirements.txt          # pinned deps — x86 / macOS
+├── requirements-jetson.txt   # pinned deps — Jetson JetPack 6.2 (aarch64, CUDA 12.6)
+├── README.md                 # setup and usage guide
+└── CLAUDE.md                 # this file
 ```
 
 ## config.yaml
@@ -92,13 +100,27 @@ Keep this. Do not remove when upgrading chromadb until confirmed fixed.
 1. Markdown: reads all `.md` files via `rglob`, skips excluded dirs/files, strips `{{...}}` Obsidian template vars before YAML parsing, splits by heading, chunks by character count with overlap
 2. PDF: reads each `.pdf` from configured `pdf_sources`, batches pages into text blocks, chunks by character count; prefers embedded PDF title metadata over filename
 
-**Embedding phase — parallel (all CPU cores):**
-3. Uses `SentenceTransformer.encode_multi_process()` to distribute embedding across all 10 CPU cores
+**Embedding phase — auto-selects backend at startup:**
+3. **CPU (main branch):** `ProcessPoolExecutor` with `embedding_workers` workers (from config); each worker loads the model once via `initializer=_init_worker` and sets `OMP_NUM_THREADS=1` to own exactly one core without contention
+4. **CUDA (feature/jetson):** single-process `model.encode(..., device="cuda", batch_size=512)`; GPU handles parallelism internally. `encode_multi_process()` is intentionally avoided — Jetson does not support CUDA IPC. If CUDA is unavailable, falls back to CPU path using `embedding_workers` (set to `1` in config — Jetson has 8 GB unified RAM shared with GPU)
 
 **Upsert phase:**
-4. Upserts to ChromaDB in batches of 512 (delete-then-recreate collection)
+5. Upserts to ChromaDB in batches of 512 (delete-then-recreate collection)
 
 **Stable IDs:** SHA-256 of `(path, section_index, chunk_index, chunk[:80])`
+
+## Jetson setup (feature/jetson branch)
+
+- **Hardware:** NVIDIA Jetson Orin Nano Super
+- **JetPack:** 6.2 — CUDA 12.6, Python 3.10 (not 3.12)
+- **PyTorch:** install from Jetson AI Lab index before other deps:
+  ```bash
+  pip install torch torchvision --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+  pip install -r requirements-jetson.txt
+  ```
+- **Why not `encode_multi_process`:** Jetson uses NvSCI IPC, not CUDA IPC — cross-process tensor sharing fails. Single-process GPU encoding is the correct path.
+- **RAM:** 8 GB unified (CPU + GPU share the same pool). `embedding_workers: 1` in `config.yaml` keeps CPU fallback to a single process — each process loads the model (~100 MB) so spawning 6 workers would waste ~600 MB.
+- **ChromaDB:** `0.6.3` publishes `manylinux_2_17_aarch64` wheels — no changes needed.
 
 ## Query logic (query_obsidian.py)
 

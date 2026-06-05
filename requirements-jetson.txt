@@ -1,0 +1,19 @@
+# Requirements for NVIDIA Jetson Orin Nano Super (JetPack 6.2, CUDA 12.6, Python 3.10)
+#
+# PyTorch must be installed from the Jetson AI Lab index — standard PyPI wheels
+# are x86_64 only and will not work on aarch64.
+#
+# Install order matters:
+#   1. pip install torch torchvision --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+#   2. pip install -r requirements-jetson.txt
+
+# Pinned to same versions as x86 where compatible
+chromadb==0.6.3
+sentence-transformers==3.3.1
+python-frontmatter==1.3.0
+PyYAML==6.0.3
+pypdf==6.12.2
+numpy==2.4.6
+
+# These are pulled in by the above; listed explicitly for reproducibility
+posthog==7.17.0
