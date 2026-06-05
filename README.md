@@ -250,6 +250,6 @@ PDF books & resources  ─┘         │
 
 **ChromaDB telemetry warnings** — ChromaDB 0.6.3 and posthog 7.x have a signature mismatch. `utils.py` suppresses it at import time. Safe to ignore; do not remove the patch when upgrading chromadb until confirmed fixed.
 
-**Encrypted PDFs** — PDFs requiring AES decryption are skipped automatically with a warning.
+**Encrypted PDFs** — AES-encrypted PDFs are decrypted transparently using a blank owner password (the common publish-lock pattern). This requires the `cryptography` package (`>=3.1`), which is included in both `requirements.txt` and `requirements-jetson.txt`. PDFs that require a non-blank password are skipped with a warning.
 
 **Unresolved Obsidian template vars** — notes with `{{DATE}}` or similar unfilled placeholders are handled by stripping `{{...}}` before YAML parsing.

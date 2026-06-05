@@ -80,6 +80,7 @@ personal-rag/
 | python-frontmatter | 1.3.0 |
 | PyYAML | 6.0.3 |
 | pypdf | 6.12.2 |
+| cryptography | >=3.1 (AES-encrypted PDF support) |
 
 ## ChromaDB state
 
