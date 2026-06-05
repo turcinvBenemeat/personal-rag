@@ -128,6 +128,8 @@ def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: 
     """Extract text from one PDF → (ids, documents, metadatas, error)."""
     try:
         reader = PdfReader(str(pdf_path))
+        if reader.is_encrypted:
+            reader.decrypt("")
     except Exception as exc:
         return [], [], [], f"skip pdf read error: {pdf_path.name}: {exc}"
 
