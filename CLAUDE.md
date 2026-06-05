@@ -37,11 +37,21 @@ Do not use bare `python` or `python3` — the Conda base environment will be pic
 personal-rag/
 ├── .venv/                    # local virtualenv — never commit
 ├── chroma_db/                # ChromaDB data — never commit
+├── .env                      # path overrides — never commit (see .env.example)
+├── .env.example              # template for .env
+├── .dockerignore
 ├── config.yaml               # vault path, pdf sources, model, chunk settings
-├── index_obsidian.py         # parallel indexer (MD + PDF → ChromaDB)
-├── query_obsidian.py         # semantic query CLI
+├── utils.py                  # shared helpers: load_config, telemetry suppression, .env loading
+├── index_obsidian.py         # streaming indexer (MD + PDF → ChromaDB)
+├── query_obsidian.py         # semantic query CLI (--domain/--type/--source/--json flags)
 ├── test_queries.py           # retrieval smoke tests across all domains
-├── requirements.txt          # pinned deps — x86 / macOS
+├── Makefile                  # shortcuts: make index/query/test, make build/docker-*/jetson-*
+├── Dockerfile                # x86 / macOS container image
+├── Dockerfile.jetson         # Jetson JetPack 6.2 container image (build on Jetson)
+├── docker-compose.yml        # x86 Compose with volume mounts
+├── docker-compose.jetson.yml # Jetson Compose (runtime: nvidia)
+├── requirements-direct.txt   # direct deps only — use to regenerate lockfile
+├── requirements.txt          # full pinned lockfile — x86 / macOS
 ├── requirements-jetson.txt   # pinned deps — Jetson JetPack 6.2 (aarch64, CUDA 12.6)
 ├── README.md                 # setup and usage guide
 └── CLAUDE.md                 # this file
@@ -138,11 +148,30 @@ Each file is processed end-to-end (extract → embed → upsert → free) before
 - Run after every reindex to verify retrieval quality
 - Add your own queries to `TEST_QUERIES` list as the vault grows
 
-## Next phase
+## Path overrides (env vars)
 
-Build `answer_obsidian.py`:
-- Retrieves top-N chunks via ChromaDB (MD + PDF)
-- Calls Claude API (`claude-sonnet-4-6`) with chunks as context
-- Returns grounded answer with cited note paths and book references
+All user-specific absolute paths can be overridden without editing `config.yaml`:
 
-No agent framework needed. One script, ~60 lines, `anthropic` SDK only.
+| Variable | Overrides |
+|---|---|
+| `RAG_VAULT_PATH` | `vault_path` |
+| `RAG_PDF_BOOKS_PATH` | pdf_sources entry with `type: book` |
+| `RAG_PDF_RESOURCES_PATH` | pdf_sources entry with `type: resource` |
+| `RAG_INDEX_PATH` | `index_path` (ChromaDB storage dir — set automatically in Docker) |
+
+Copy `.env.example` to `.env` and fill in your paths. `utils.load_config()` loads `.env` automatically via `python-dotenv`.
+
+## Docker
+
+Two Dockerfiles are provided:
+- `Dockerfile` — x86 / macOS, uses `requirements.txt`
+- `Dockerfile.jetson` — Jetson JetPack 6.2 (aarch64), uses `requirements-jetson.txt` + PyTorch from Jetson AI Lab index
+
+**Build Dockerfile.jetson on the Jetson itself** — the PyTorch wheels are aarch64-only and will not install on x86.
+
+Volumes used in both Compose files:
+- `chroma` → `/data/chroma` (ChromaDB data, `RAG_INDEX_PATH=/data/chroma`)
+- `hf-cache` → `/data/hf-cache` (HuggingFace model cache)
+- Host vault/book/resource dirs → `/vault`, `/books`, `/resources` (read-only)
+
+The `docker-compose.jetson.yml` sets `runtime: nvidia` and `NVIDIA_VISIBLE_DEVICES=all` for GPU access. Requires NVIDIA Container Toolkit on the host.

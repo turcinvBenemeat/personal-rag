@@ -1,6 +1,6 @@
 # personal-rag
 
-Local semantic search over an Obsidian knowledge vault and PDF book library. Indexes Markdown notes and PDFs into a local ChromaDB vector store and retrieves relevant chunks by natural language query.
+Local semantic search over an Obsidian knowledge vault and PDF book library. Indexes Markdown notes and PDFs into a local ChromaDB vector store and retrieves relevant chunks by natural language query. Runs fully offline — optimised for NVIDIA Jetson Orin Nano Super (JetPack 6.2) and macOS/x86.
 
 ## What it indexes
 
@@ -8,39 +8,51 @@ Local semantic search over an Obsidian knowledge vault and PDF book library. Ind
 - **PDF books** — technical books from `mindmap/Books/`
 - **PDF resources** — papers, guides, and reference materials from `mindmap/Resources/`
 
-All content lives in Google Drive and is indexed locally. Nothing is sent to any cloud service.
+All content is indexed locally. Nothing is sent to any cloud service.
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.10+ (3.10 on Jetson, 3.12+ on macOS/x86)
 - [uv](https://github.com/astral-sh/uv) — for environment management
 
 ## Setup
 
-```bash
-# Clone / enter the project
-cd personal-rag
+### macOS / x86
 
-# Create virtual environment and install dependencies
+```bash
+cd personal-rag
 uv venv .venv
 uv pip install -r requirements.txt
 ```
 
-## Configuration
+### Jetson Orin Nano Super (JetPack 6.2, CUDA 12.6)
 
-Edit `config.yaml` before first run:
+PyTorch must come from the Jetson AI Lab index — standard PyPI wheels are x86 only:
 
-```yaml
-vault_path: '/path/to/your/Obsidian Vault/'   # Obsidian vault root
-
-pdf_sources:
-  - path: '/path/to/Books/'
-    type: book
-  - path: '/path/to/Resources/'
-    type: resource
+```bash
+pip install torch torchvision --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+pip install -r requirements-jetson.txt
 ```
 
-All other settings (chunk size, embedding model, excluded dirs) have sensible defaults.
+## Configuration
+
+Paths are set in `config.yaml`. To override them without editing the file, create a `.env` file (see `.env.example`) or set environment variables directly:
+
+| Variable | Overrides |
+|---|---|
+| `RAG_VAULT_PATH` | `vault_path` in config.yaml |
+| `RAG_PDF_BOOKS_PATH` | pdf_sources entry with `type: book` |
+| `RAG_PDF_RESOURCES_PATH` | pdf_sources entry with `type: resource` |
+| `RAG_INDEX_PATH` | `index_path` (ChromaDB storage dir) |
+
+```bash
+# .env example
+RAG_VAULT_PATH=/Volumes/Drive/mindmap/Career Knowledge Base/
+RAG_PDF_BOOKS_PATH=/Volumes/Drive/mindmap/Books/
+RAG_PDF_RESOURCES_PATH=/Volumes/Drive/mindmap/Resources/
+```
+
+All other settings (chunk size, embedding model, excluded dirs) have sensible defaults in `config.yaml`.
 
 ## Usage
 
@@ -50,16 +62,26 @@ All other settings (chunk size, embedding model, excluded dirs) have sensible de
 .venv/bin/python index_obsidian.py
 ```
 
-Indexing is parallelised: 16 threads for text extraction, then GPU encoding if CUDA is available, or multi-process CPU embedding otherwise. Expect ~5–10 minutes for a large vault + book library on first run.
+Indexing is fully streaming — each file is extracted, embedded, and upserted to ChromaDB before the next file starts. No global chunk accumulation in RAM. Uses GPU if CUDA is available, otherwise CPU.
+
+Expect ~5–10 minutes for a large vault + book library on first run.
 
 ### Query
 
 ```bash
 .venv/bin/python query_obsidian.py "What do I know about Kubernetes?"
-.venv/bin/python query_obsidian.py "How should I handle secrets in Python?" 12
+.venv/bin/python query_obsidian.py "How should I handle secrets in Python?" -n 12
 ```
 
-The optional trailing number controls how many results to return (default: 8).
+**Metadata filters** narrow results to a specific domain, type, or source:
+
+```bash
+.venv/bin/python query_obsidian.py "container orchestration" --domain DevOps
+.venv/bin/python query_obsidian.py "neural networks" --source pdf --type book
+.venv/bin/python query_obsidian.py "RAG pipeline" --json
+```
+
+Pass `--help` to see all options.
 
 **Output per result:**
 - Title and section heading
@@ -77,27 +99,100 @@ The optional trailing number controls how many results to return (default: 8).
 
 Run this after every reindex to catch quality regressions. Results below distance 0.75 are marked OK; above are marked WEAK.
 
+### Makefile shortcuts
+
+A `Makefile` wraps all common commands so you don't have to type the full paths:
+
+```bash
+make index
+make query Q="What do I know about Kubernetes?"
+make test K=devops
+
+make build          # Docker x86
+make docker-index
+make docker-query Q="secrets in Python"
+
+make build-jetson   # Docker Jetson (run on Jetson)
+make jetson-index
+make jetson-query Q="bioprocessing workflows"
+```
+
+## Docker
+
+The repo ships two Dockerfiles and matching Compose files.
+
+### Prerequisites
+
+1. Copy `.env.example` to `.env` and set your three paths:
+
+```bash
+cp .env.example .env
+# edit .env — set RAG_VAULT_PATH, RAG_PDF_BOOKS_PATH, RAG_PDF_RESOURCES_PATH
+```
+
+2. Source paths are mounted read-only into the container; ChromaDB and the HuggingFace model cache are stored in named Docker volumes that survive restarts.
+
+### x86 / macOS
+
+```bash
+make build
+make docker-index                           # index vault + PDFs
+make docker-query Q="What is K3s?"          # query
+make docker-test                            # smoke tests
+```
+
+Or directly:
+
+```bash
+docker compose run --rm rag python index_obsidian.py
+docker compose run --rm rag python query_obsidian.py "your question" --domain DevOps
+```
+
+### Jetson Orin Nano Super (JetPack 6.2)
+
+**Build and run on the Jetson itself.** PyTorch wheels are aarch64-only and will not install on x86.
+
+Requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) on the host.
+
+```bash
+make build-jetson
+make jetson-index
+make jetson-query Q="What do I know about bioprocessing?"
+```
+
+Or directly:
+
+```bash
+docker compose -f docker-compose.jetson.yml run --rm rag python index_obsidian.py
+docker compose -f docker-compose.jetson.yml run --rm rag python query_obsidian.py "your question"
+```
+
+The first `build-jetson` will be slow (~1.5 GB PyTorch layer). Subsequent builds reuse the cached layer.
+
 ## How it works
 
 ```
 Obsidian vault (.md)  ─┐
-                        ├─► Text extraction (16 threads)
+                        ├─► Per-file text extraction (ThreadPoolExecutor, md_workers / pdf_workers)
 PDF books & resources  ─┘         │
+                                   │  one file at a time
                                    ▼
                         Chunk by heading + character count
-                        (1800 chars, 250 overlap)
+                        (1200 chars max, 150 overlap)
                                    │
                                    ▼
                         Embed with all-MiniLM-L6-v2
-                        (CUDA single-process or CPU ProcessPoolExecutor)
+                        (single-process; CUDA on Jetson/GPU, CPU fallback)
                                    │
                                    ▼
-                        ChromaDB (local, ./chroma_db)
+                        Upsert batch → ChromaDB (local, ./chroma_db)
+                        free memory → next file
                                    │
                           query_obsidian.py
                                    │
                                    ▼
                         Top-N chunks by cosine similarity
+                        optional metadata filter (--domain / --type / --source)
 ```
 
 ## Metadata per chunk
@@ -118,20 +213,25 @@ PDF books & resources  ─┘         │
 
 | File | Purpose |
 |---|---|
-| `index_obsidian.py` | Parallel indexer — MD + PDF → ChromaDB |
-| `query_obsidian.py` | Semantic query CLI |
-| `test_queries.py` | Retrieval smoke tests |
+| `utils.py` | Shared helpers — telemetry suppression, `load_config()`, env var path overrides |
+| `index_obsidian.py` | Streaming indexer — MD + PDF → ChromaDB |
+| `query_obsidian.py` | Semantic query CLI with metadata filters and JSON output |
+| `test_queries.py` | 13-query retrieval smoke tests across all vault domains |
 | `config.yaml` | Vault paths, PDF sources, chunk settings |
-| `requirements.txt` | Pinned Python dependencies |
+| `.env.example` | Template for path overrides via environment variables |
+| `Makefile` | Shortcuts for local and Docker workflows |
+| `Dockerfile` | x86 / macOS container image |
+| `Dockerfile.jetson` | Jetson JetPack 6.2 container image (build on Jetson) |
+| `docker-compose.yml` | x86 Compose file with volume mounts |
+| `docker-compose.jetson.yml` | Jetson Compose file (`runtime: nvidia`) |
+| `requirements.txt` | Full pinned dependency lockfile (macOS/x86) |
+| `requirements-direct.txt` | Direct dependencies only (use with `uv pip compile` to regenerate lockfile) |
+| `requirements-jetson.txt` | Direct dependencies for Jetson JetPack 6.2 (aarch64, CUDA 12.6) |
 
 ## Known issues
 
-**ChromaDB telemetry warnings** — ChromaDB 0.6.3 and posthog 7.x have a signature mismatch. Both scripts suppress it with a one-line monkey-patch. Safe to ignore; do not remove the patch when upgrading chromadb until confirmed fixed.
+**ChromaDB telemetry warnings** — ChromaDB 0.6.3 and posthog 7.x have a signature mismatch. `utils.py` suppresses it at import time. Safe to ignore; do not remove the patch when upgrading chromadb until confirmed fixed.
 
-**Encrypted PDFs** — a small number of PDFs require AES decryption (`cryptography` package). These are skipped automatically with a warning.
+**Encrypted PDFs** — PDFs requiring AES decryption are skipped automatically with a warning.
 
-**Unresolved Obsidian template vars** — notes with `{{DATE}}` or similar unfilled template placeholders in their frontmatter are handled by stripping `{{...}}` before YAML parsing.
-
-## Next phase
-
-`answer_obsidian.py` — retrieves top-N chunks from ChromaDB and calls the Claude API to produce a grounded answer with citations to source notes and books. No agent framework; one script, ~60 lines.
+**Unresolved Obsidian template vars** — notes with `{{DATE}}` or similar unfilled placeholders are handled by stripping `{{...}}` before YAML parsing.

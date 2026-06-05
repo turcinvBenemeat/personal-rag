@@ -11,20 +11,12 @@ Each query prints the top 3 results. Distance < 0.6 is a strong match,
 0.6-0.8 is acceptable, > 0.8 is weak.
 """
 
-import os
 import sys
 
-os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-
-import posthog as _posthog
-_posthog.capture = lambda *a, **kw: None
+from utils import load_config  # sets telemetry env var and patches posthog before chromadb loads
 
 import chromadb
-import yaml
-from pathlib import Path
 from sentence_transformers import SentenceTransformer
-
-_CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 # ---------------------------------------------------------------------------
 # Test queries — one or two per domain, plus cross-domain
@@ -61,11 +53,6 @@ TEST_QUERIES = [
 
 N_RESULTS = 3
 DISTANCE_WARN = 0.75  # print a warning above this threshold
-
-
-def load_config():
-    with open(_CONFIG_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def run_tests(filter_keyword: str = ""):

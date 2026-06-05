@@ -15,5 +15,6 @@ PyYAML==6.0.3
 pypdf==6.12.2
 numpy==2.4.6
 
-# These are pulled in by the above; listed explicitly for reproducibility
+# These are pulled in by the above or needed for shared utilities
 posthog==7.17.0
+python-dotenv==1.2.2

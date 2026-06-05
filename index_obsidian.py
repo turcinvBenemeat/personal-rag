@@ -5,30 +5,19 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-
-import posthog as _posthog
-_posthog.capture = lambda *a, **kw: None  # chromadb 0.6.x / posthog 7.x signature mismatch
+from utils import load_config  # sets telemetry env var and patches posthog before chromadb loads
 
 import torch
 
 import chromadb
 import frontmatter
-import yaml
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
-
-_CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 
 def log(msg: str) -> None:
     """Print with immediate flush so progress is visible even when piped."""
     print(msg, flush=True)
-
-
-def load_config():
-    with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def should_exclude(path: Path, vault_path: Path, config: dict) -> bool:

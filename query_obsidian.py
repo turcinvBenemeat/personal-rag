@@ -1,37 +1,65 @@
-import os
+import argparse
+import json
 import sys
-from pathlib import Path
 
-os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-
-import posthog as _posthog
-_posthog.capture = lambda *a, **kw: None  # chromadb 0.6.x / posthog 7.x signature mismatch
+from utils import load_config  # sets telemetry env var and patches posthog before chromadb loads
 
 import chromadb
-import yaml
 from sentence_transformers import SentenceTransformer
 
-_CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
-
-def load_config():
-    with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+def build_where(domain=None, type_=None, source=None):
+    """Build a ChromaDB metadata filter from optional field constraints."""
+    filters = []
+    if domain:
+        filters.append({"domain": {"$eq": domain}})
+    if type_:
+        filters.append({"type": {"$eq": type_}})
+    if source:
+        filters.append({"source": {"$eq": source}})
+    if not filters:
+        return None
+    if len(filters) == 1:
+        return filters[0]
+    return {"$and": filters}
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python query_obsidian.py \"your question\" [n_results]")
-        raise SystemExit(1)
+    parser = argparse.ArgumentParser(
+        description="Semantic query over indexed Obsidian vault and PDFs.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  %(prog)s "What do I know about Kubernetes?"
+  %(prog)s "secrets in Python" -n 12
+  %(prog)s "Kubernetes" --domain DevOps
+  %(prog)s "book recommendations" --source pdf --type book
+  %(prog)s "RAG pipeline" --json
+""",
+    )
+    parser.add_argument("query", nargs="+", help="Query text (quoted or unquoted)")
+    parser.add_argument(
+        "-n", "--n-results", type=int, default=8, metavar="N",
+        help="Number of results to return (default: 8)",
+    )
+    parser.add_argument(
+        "--domain", default=None,
+        help="Filter by domain metadata (e.g. DevOps, 'Software Engineering')",
+    )
+    parser.add_argument(
+        "--type", dest="type_", default=None,
+        help="Filter by type metadata (e.g. book, resource, Knowledge)",
+    )
+    parser.add_argument(
+        "--source", default=None,
+        help="Filter by source metadata (e.g. pdf)",
+    )
+    parser.add_argument(
+        "--json", dest="output_json", action="store_true",
+        help="Output results as a JSON array (useful for piping)",
+    )
+    args = parser.parse_args()
 
-    # Last arg is treated as n_results if it's a plain integer
-    args = sys.argv[1:]
-    if len(args) >= 2 and args[-1].isdigit():
-        n_results = int(args[-1])
-        query = " ".join(args[:-1])
-    else:
-        n_results = 8
-        query = " ".join(args)
+    query = " ".join(args.query)
 
     config = load_config()
     model_name = config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
@@ -47,23 +75,36 @@ def main():
     )
     collection = client.get_collection(collection_name)
 
-    results = collection.query(
+    where = build_where(args.domain, args.type_, args.source)
+    query_kwargs = dict(
         query_embeddings=[query_embedding],
-        n_results=n_results,
+        n_results=args.n_results,
         include=["documents", "metadatas", "distances"],
     )
+    if where:
+        query_kwargs["where"] = where
+
+    results = collection.query(**query_kwargs)
 
     docs = results["documents"][0]
     metas = results["metadatas"][0]
     distances = results["distances"][0]
 
+    if args.output_json:
+        output = [
+            {"distance": dist, "document": doc, **meta}
+            for doc, meta, dist in zip(docs, metas, distances)
+        ]
+        print(json.dumps(output, indent=2, ensure_ascii=False))
+        return
+
     print()
     print("Query: " + query)
+    if where:
+        print("Filter: " + json.dumps(where))
     print()
 
-    for i, item in enumerate(zip(docs, metas, distances), start=1):
-        doc, meta, distance = item
-
+    for i, (doc, meta, distance) in enumerate(zip(docs, metas, distances), start=1):
         print("=" * 80)
         print(str(i) + ". " + str(meta.get("title")) + " - " + str(meta.get("heading")))
         print("Path: " + str(meta.get("path")))
