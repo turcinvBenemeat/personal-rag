@@ -48,11 +48,10 @@ personal-rag/
 │       └── query.py          # semantic query CLI; entry: rag-query
 ├── tests/
 │   └── test_queries.py       # 13-query smoke tests across all vault domains
-├── docker/
-│   ├── Dockerfile            # x86 / macOS container image
-│   ├── Dockerfile.jetson     # Jetson JetPack 6.2 container image (build on Jetson)
-│   ├── docker-compose.yml    # x86 Compose with volume mounts
-│   └── docker-compose.jetson.yml  # Jetson Compose (runtime: nvidia)
+├── Dockerfile                # x86 / macOS container image
+├── Dockerfile.jetson         # Jetson JetPack 6.2 container image (build on Jetson)
+├── docker-compose.yml        # x86 Compose with volume mounts
+├── docker-compose.jetson.yml # Jetson Compose (runtime: nvidia)
 ├── .venv/                    # local virtualenv — never commit
 ├── chroma_db/                # ChromaDB data — never commit
 ├── .env                      # path overrides — never commit (see .env.example)
@@ -177,9 +176,9 @@ Copy `.env.example` to `.env` and fill in your paths. `rag.utils.load_config()` 
 
 ## Docker
 
-Two Dockerfiles are provided in `docker/`:
-- `docker/Dockerfile` — x86 / macOS, uses `requirements.txt`
-- `docker/Dockerfile.jetson` — Jetson JetPack 6.2 (aarch64), uses `requirements-jetson.txt` + PyTorch from Jetson AI Lab index
+Two Dockerfiles are provided at the project root:
+- `Dockerfile` — x86 / macOS, uses `requirements.txt`
+- `Dockerfile.jetson` — Jetson JetPack 6.2 (aarch64), uses `requirements-jetson.txt` + PyTorch from Jetson AI Lab index
 
 **Build `Dockerfile.jetson` on the Jetson itself** — the PyTorch wheels are aarch64-only and will not install on x86.
 

@@ -50,27 +50,27 @@ test:
 # ── Docker x86 ────────────────────────────────────────────────────────────────
 
 build:
-	docker build -f docker/Dockerfile -t personal-rag:latest .
+	docker build -t personal-rag:latest .
 
 docker-index:
-	docker compose -f docker/docker-compose.yml run --rm rag python -m rag.indexer
+	docker compose run --rm rag python -m rag.indexer
 
 docker-query:
-	docker compose -f docker/docker-compose.yml run --rm rag python -m rag.query $(Q)
+	docker compose run --rm rag python -m rag.query $(Q)
 
 docker-test:
-	docker compose -f docker/docker-compose.yml run --rm rag python tests/test_queries.py $(K)
+	docker compose run --rm rag python tests/test_queries.py $(K)
 
 # ── Docker Jetson ─────────────────────────────────────────────────────────────
 
 build-jetson:
-	docker build -f docker/Dockerfile.jetson -t personal-rag:jetson .
+	docker build -f Dockerfile.jetson -t personal-rag:jetson .
 
 jetson-index:
-	docker compose -f docker/docker-compose.jetson.yml run --rm rag python -m rag.indexer
+	docker compose -f docker-compose.jetson.yml run --rm rag python -m rag.indexer
 
 jetson-query:
-	docker compose -f docker/docker-compose.jetson.yml run --rm rag python -m rag.query $(Q)
+	docker compose -f docker-compose.jetson.yml run --rm rag python -m rag.query $(Q)
 
 jetson-test:
-	docker compose -f docker/docker-compose.jetson.yml run --rm rag python tests/test_queries.py $(K)
+	docker compose -f docker-compose.jetson.yml run --rm rag python tests/test_queries.py $(K)

@@ -3,8 +3,8 @@
 # Run ON the Jetson. Requires NVIDIA Container Toolkit.
 #
 # Usage:
-#   docker compose -f docker/docker-compose.jetson.yml run --rm rag python -m rag.indexer
-#   docker compose -f docker/docker-compose.jetson.yml run --rm rag python -m rag.query "your question"
+#   docker compose -f docker-compose.jetson.yml run --rm rag python -m rag.indexer
+#   docker compose -f docker-compose.jetson.yml run --rm rag python -m rag.query "your question"
 #
 # Or use the Makefile shortcuts:
 #   make build-jetson
@@ -14,8 +14,8 @@
 services:
   rag:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.jetson
+      context: .
+      dockerfile: Dockerfile.jetson
     image: personal-rag:jetson
     runtime: nvidia
     volumes:

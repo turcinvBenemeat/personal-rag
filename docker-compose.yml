@@ -4,8 +4,8 @@
 # RAG_PDF_BOOKS_PATH, RAG_PDF_RESOURCES_PATH.
 #
 # Usage:
-#   docker compose -f docker/docker-compose.yml run --rm rag python -m rag.indexer
-#   docker compose -f docker/docker-compose.yml run --rm rag python -m rag.query "your question"
+#   docker compose run --rm rag python -m rag.indexer
+#   docker compose run --rm rag python -m rag.query "your question"
 #
 # Or use the Makefile shortcuts:
 #   make docker-index
@@ -14,8 +14,8 @@
 services:
   rag:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     image: personal-rag:latest
     volumes:
       - chroma:/data/chroma

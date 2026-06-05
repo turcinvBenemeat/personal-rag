@@ -150,8 +150,8 @@ make docker-test
 Or directly:
 
 ```bash
-docker compose -f docker/docker-compose.yml run --rm rag python -m rag.indexer
-docker compose -f docker/docker-compose.yml run --rm rag python -m rag.query "your question" --domain DevOps
+docker compose run --rm rag python -m rag.indexer
+docker compose run --rm rag python -m rag.query "your question" --domain DevOps
 ```
 
 ### Jetson Orin Nano Super (JetPack 6.2)
@@ -169,8 +169,8 @@ make jetson-query Q="What do I know about bioprocessing?"
 Or directly:
 
 ```bash
-docker compose -f docker/docker-compose.jetson.yml run --rm rag python -m rag.indexer
-docker compose -f docker/docker-compose.jetson.yml run --rm rag python -m rag.query "your question"
+docker compose -f docker-compose.jetson.yml run --rm rag python -m rag.indexer
+docker compose -f docker-compose.jetson.yml run --rm rag python -m rag.query "your question"
 ```
 
 The first `build-jetson` will be slow (~1.5 GB PyTorch layer). Subsequent builds reuse the cached layer.
@@ -223,10 +223,10 @@ PDF books & resources  ─┘         │
 | `src/rag/indexer.py` | Streaming indexer — MD + PDF → ChromaDB; CLI entry: `rag-index` |
 | `src/rag/query.py` | Semantic query CLI with metadata filters and JSON output; CLI entry: `rag-query` |
 | `tests/test_queries.py` | 13-query retrieval smoke tests across all vault domains |
-| `docker/Dockerfile` | x86 / macOS container image |
-| `docker/Dockerfile.jetson` | Jetson JetPack 6.2 container image (build on Jetson) |
-| `docker/docker-compose.yml` | x86 Compose file with volume mounts |
-| `docker/docker-compose.jetson.yml` | Jetson Compose file (`runtime: nvidia`) |
+| `Dockerfile` | x86 / macOS container image |
+| `Dockerfile.jetson` | Jetson JetPack 6.2 container image (build on Jetson) |
+| `docker-compose.yml` | x86 Compose file with volume mounts |
+| `docker-compose.jetson.yml` | Jetson Compose file (`runtime: nvidia`) |
 | `config.yaml` | Vault paths, PDF sources, chunk settings |
 | `pyproject.toml` | Package definition and `rag-index` / `rag-query` entry points |
 | `.env.example` | Template for path overrides via environment variables |
