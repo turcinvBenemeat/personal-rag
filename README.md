@@ -234,6 +234,17 @@ PDF books & resources  ─┘         │
 | `requirements.txt` | Full pinned dependency lockfile (macOS/x86) |
 | `requirements-direct.txt` | Direct dependencies only (use with `uv pip compile` to regenerate lockfile) |
 | `requirements-jetson.txt` | Direct dependencies for Jetson JetPack 6.2 (aarch64, CUDA 12.6) |
+| `docs/architecture.md` | Pipeline walkthrough and design notes |
+| `docs/configuration.md` | Full config.yaml reference and env var overrides |
+| `docs/jetson.md` | Jetson setup guide |
+
+## Docs
+
+| Document | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Pipeline walkthrough, streaming design, chunk IDs, metadata fields |
+| [docs/configuration.md](docs/configuration.md) | Full `config.yaml` reference, env var overrides, hardware tuning table |
+| [docs/jetson.md](docs/jetson.md) | Jetson install guide, Docker, memory budget, GPU constraints |
 
 ## Known issues
 
