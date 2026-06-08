@@ -10,7 +10,10 @@
 # Requires NVIDIA Container Toolkit:
 #   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
 
-FROM ubuntu:22.04
+# Base on NVIDIA's L4T JetPack image (Ubuntu 22.04 + CUDA 12.6 + cuDNN + TensorRT).
+# A plain ubuntu base lacks the CUDA runtime libs (libcudart/libcublas/libcudnn)
+# the jetson-ai-lab torch wheel needs — JetPack 6 does not inject them at runtime.
+FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
 ARG DEBIAN_FRONTEND=noninteractive
 
