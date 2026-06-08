@@ -17,8 +17,9 @@ FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# python toolchain + libopenblas (BLAS runtime the jetson-ai-lab torch wheel links against)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3.10-dev python3-pip gcc \
+    python3.10 python3.10-dev python3-pip gcc libopenblas-dev \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.10 /usr/local/bin/python \
     && ln -sf /usr/bin/pip3 /usr/local/bin/pip
