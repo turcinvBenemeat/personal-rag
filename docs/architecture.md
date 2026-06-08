@@ -48,11 +48,17 @@ The pipeline is **fully streaming** — no global accumulation of chunks in RAM.
 
 ### Stable chunk IDs
 
-SHA-256 of `(path, section_index, chunk_index, chunk[:80])` — deterministic across reruns for the same content.
+SHA-256 of `(path, section_index, chunk_index, chunk)` — the full chunk text is hashed, so identical content always yields the same ID and any edit yields a new one. This is what makes incremental indexing reliable.
 
-### Collection lifecycle
+### Collection lifecycle (incremental)
 
-Delete-then-recreate at the start of every full reindex. Intentional for MVP simplicity.
+The collection is opened with `get_or_create_collection` — never wiped. Each run:
+
+1. Snapshots the IDs already in the collection.
+2. For every chunk, records its ID as "seen" and embeds + upserts it only if the ID is not already present (unchanged chunks are skipped — no re-embedding).
+3. After all sources are processed, deletes any indexed ID that was not seen this run — pruning chunks from edited files (old content) and from deleted files.
+
+Re-running on an unchanged vault embeds nothing. Changing `chunk_max_chars`/`chunk_overlap_chars` changes every chunk's text and therefore every ID, so the next run re-embeds everything and prunes the old chunks — effectively a clean rebuild.
 
 ## Query (`src/rag/query.py`)
 

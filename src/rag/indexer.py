@@ -114,7 +114,7 @@ def extract_md_file(md_file: Path, vault_path: Path, config: dict, max_chars: in
     ids, documents, metadatas = [], [], []
     for section_index, (heading, section_text) in enumerate(sections):
         for chunk_index, chunk in enumerate(chunk_text(section_text, max_chars=max_chars, overlap=overlap)):
-            ids.append(stable_id(rel_path, section_index, chunk_index, chunk[:80]))
+            ids.append(stable_id(rel_path, section_index, chunk_index, chunk))
             documents.append(chunk)
             metadatas.append({
                 "path": rel_path, "title": title, "heading": heading,
@@ -143,7 +143,7 @@ def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: 
     def flush_block(block_text, block_start, end_page):
         for chunk_index, chunk in enumerate(chunk_text(block_text.strip(), max_chars, overlap)):
             heading = f"p.{block_start}" if block_start == end_page else f"p.{block_start}-{end_page}"
-            ids.append(stable_id(str(pdf_path), block_start, chunk_index, chunk[:80]))
+            ids.append(stable_id(str(pdf_path), block_start, chunk_index, chunk))
             documents.append(chunk)
             metadatas.append({
                 "path": pdf_path.name, "title": title, "heading": heading,
@@ -184,12 +184,31 @@ def embed_and_upsert(model, device, docs, ids, metas, embed_batch_size, collecti
         b_ids   = ids[i:i + embed_batch_size]
         b_metas = metas[i:i + embed_batch_size]
         embeddings = model.encode(b_docs, normalize_embeddings=True, batch_size=embed_batch_size)
-        collection.add(ids=b_ids, documents=b_docs, embeddings=embeddings.tolist(), metadatas=b_metas)
+        collection.upsert(ids=b_ids, documents=b_docs, embeddings=embeddings.tolist(), metadatas=b_metas)
         del embeddings
         if device == "cuda":
             torch.cuda.empty_cache()
         if n_batches > 1:
             log(f"      batch {batch_idx}/{n_batches}  ({min(i + embed_batch_size, n)}/{n} chunks)")
+
+
+def index_file_chunks(ids, docs, metas, existing_ids, seen_ids,
+                      model, device, embed_batch, collection):
+    """Incrementally index one file's chunks.
+
+    Records every chunk ID in ``seen_ids`` (used afterwards to prune stale
+    chunks), then embeds + upserts only chunks whose ID is not already in the
+    index. Identical content yields an identical ID, so unchanged chunks are
+    skipped. Returns (n_new, n_total)."""
+    seen_ids.update(ids)
+    new = [k for k, cid in enumerate(ids) if cid not in existing_ids]
+    if not new:
+        return 0, len(ids)
+    n_ids   = [ids[k]   for k in new]
+    n_docs  = [docs[k]  for k in new]
+    n_metas = [metas[k] for k in new]
+    embed_and_upsert(model, device, n_docs, n_ids, n_metas, embed_batch, collection)
+    return len(n_ids), len(ids)
 
 
 # ---------------------------------------------------------------------------
@@ -229,14 +248,18 @@ def main():
         path=index_path,
         settings=chromadb.Settings(anonymized_telemetry=False),
     )
-    try:
-        client.delete_collection(collection_name)
-        log(f"Deleted existing collection: {collection_name}")
-    except Exception:
-        pass
+    collection = client.get_or_create_collection(name=collection_name)
 
-    collection = client.create_collection(name=collection_name)
-    total_chunks = 0
+    # Incremental indexing: snapshot the IDs already in the index. Chunks whose
+    # content is unchanged keep the same (content-hashed) ID and are skipped;
+    # every ID we encounter this run is recorded in seen_ids so that anything
+    # left over (edited or deleted sources) can be pruned at the end.
+    existing_ids = set(collection.get(include=[])["ids"])
+    seen_ids = set()
+    log(f"Existing chunks in index: {len(existing_ids)}")
+
+    total_chunks = 0   # chunks present this run (new + skipped)
+    total_new = 0      # chunks actually embedded this run
 
     # --- Markdown ---
     md_files = [f for f in sorted(vault_path.rglob("*.md")) if not should_exclude(f, vault_path, config)]
@@ -251,13 +274,16 @@ def main():
                 continue
             if not docs:
                 continue
-            log(f"  [{file_idx}/{len(md_files)}] {md_file.name}  ({len(docs)} chunks)")
-            embed_and_upsert(model, device, docs, ids, metas, embed_batch, collection)
-            total_chunks += len(docs)
+            n_new, n_total = index_file_chunks(ids, docs, metas, existing_ids, seen_ids,
+                                               model, device, embed_batch, collection)
+            status = f"{n_new} new / {n_total} chunks" if n_new else f"unchanged, {n_total} chunks"
+            log(f"  [{file_idx}/{len(md_files)}] {md_file.name}  ({status})")
+            total_chunks += n_total
+            total_new    += n_new
             del ids, docs, metas
             gc.collect()
 
-    log(f"Markdown complete: {total_chunks} chunks indexed")
+    log(f"Markdown complete: {total_chunks} chunks ({total_new} embedded this run)")
 
     # --- PDF sources ---
     for pdf_source in config.get("pdf_sources", []):
@@ -271,6 +297,7 @@ def main():
         pdf_files = sorted(pdf_dir.glob("*.pdf"))
         log(f"\nPDF source [{source_type}]: {len(pdf_files)} files — {pdf_dir.name}")
         source_chunks = 0
+        source_new = 0
 
         with ThreadPoolExecutor(max_workers=pdf_workers) as pool:
             futures = [(pool.submit(extract_pdf_file, f, source_type, max_chars, overlap), f) for f in pdf_files]
@@ -281,18 +308,31 @@ def main():
                     continue
                 if not docs:
                     continue
-                log(f"  [{file_idx}/{len(pdf_files)}] {pdf_file.name}  ({len(docs)} chunks)")
-                embed_and_upsert(model, device, docs, ids, metas, embed_batch, collection)
-                total_chunks  += len(docs)
-                source_chunks += len(docs)
+                n_new, n_total = index_file_chunks(ids, docs, metas, existing_ids, seen_ids,
+                                                   model, device, embed_batch, collection)
+                status = f"{n_new} new / {n_total} chunks" if n_new else f"unchanged, {n_total} chunks"
+                log(f"  [{file_idx}/{len(pdf_files)}] {pdf_file.name}  ({status})")
+                total_chunks  += n_total
+                total_new     += n_new
+                source_chunks += n_total
+                source_new    += n_new
                 del ids, docs, metas
                 gc.collect()
                 if device == "cuda":
                     torch.cuda.empty_cache()
 
-        log(f"  [{source_type}] complete: {source_chunks} chunks indexed")
+        log(f"  [{source_type}] complete: {source_chunks} chunks ({source_new} embedded this run)")
 
-    log(f"\nIndexing complete. Total chunks: {total_chunks}")
+    # Prune chunks that no longer exist in any source (edited or deleted files).
+    stale = existing_ids - seen_ids
+    if stale:
+        stale_list = list(stale)
+        for i in range(0, len(stale_list), 500):
+            collection.delete(ids=stale_list[i:i + 500])
+        log(f"Removed {len(stale)} stale chunks (edited or deleted sources)")
+
+    log(f"\nIndexing complete. Index now holds {len(seen_ids)} chunks "
+        f"({total_new} embedded, {total_chunks - total_new} unchanged, {len(stale)} removed).")
 
 
 if __name__ == "__main__":
