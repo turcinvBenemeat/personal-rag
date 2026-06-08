@@ -71,3 +71,29 @@ Jetson uses NvSCI IPC instead of CUDA IPC. Cross-process CUDA tensor sharing fai
 ## ChromaDB on aarch64
 
 ChromaDB `0.6.3` publishes `manylinux_2_17_aarch64` wheels — no special handling needed.
+
+## libcudss missing at runtime
+
+`torch 2.8+` from `pypi.jetson-ai-lab.io/jp6/cu126` links against `libcudss.so.0` (CUDA Direct Sparse Solver). This library is **not** bundled in `l4t-jetpack:r36.4.0`, **not** in Ubuntu Ports, and **not** in the NVIDIA CUDA sbsa apt repo (that repo is for server ARM64 / GH200, not Jetson).
+
+Symptom: `ImportError: libcudss.so.0: cannot open shared object file: No such file or directory` on the first `import torch`.
+
+**Fix (already in Dockerfile.jetson):** install via NVIDIA's Jetson/Tegra-specific local `.deb` installer:
+
+```dockerfile
+RUN wget -q https://developer.download.nvidia.com/compute/cudss/0.7.1/local_installers/cudss-local-tegra-repo-ubuntu2204-0.7.1_0.7.1-1_arm64.deb \
+    && dpkg -i cudss-local-tegra-repo-ubuntu2204-0.7.1_0.7.1-1_arm64.deb \
+    && cp /var/cudss-local-tegra-repo-ubuntu2204-0.7.1/cudss-*-keyring.gpg /usr/share/keyrings/ \
+    && apt-get update && apt-get install -y cudss
+```
+
+To install cuDSS directly on the Jetson host (outside Docker):
+
+```bash
+wget https://developer.download.nvidia.com/compute/cudss/0.7.1/local_installers/cudss-local-tegra-repo-ubuntu2204-0.7.1_0.7.1-1_arm64.deb
+sudo dpkg -i cudss-local-tegra-repo-ubuntu2204-0.7.1_0.7.1-1_arm64.deb
+sudo cp /var/cudss-local-tegra-repo-ubuntu2204-0.7.1/cudss-*-keyring.gpg /usr/share/keyrings/
+sudo apt-get update && sudo apt-get install -y cudss
+```
+
+**Alternative:** pin torch to `==2.7.*` in the Dockerfile — that version does not link against libcudss at all.

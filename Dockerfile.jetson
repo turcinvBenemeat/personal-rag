@@ -17,9 +17,17 @@ FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# python toolchain + libopenblas (BLAS runtime the jetson-ai-lab torch wheel links against)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3.10-dev python3-pip gcc libopenblas-dev \
+# Install cuDSS (CUDA Direct Sparse Solver) before other packages.
+# torch 2.8+ on JetPack 6 requires libcudss.so.0. It is NOT in Ubuntu Ports or the CUDA sbsa
+# repo. NVIDIA ships it as a Jetson/Tegra-specific local .deb installer only.
+RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates \
+    && wget -q https://developer.download.nvidia.com/compute/cudss/0.7.1/local_installers/cudss-local-tegra-repo-ubuntu2204-0.7.1_0.7.1-1_arm64.deb \
+    && dpkg -i cudss-local-tegra-repo-ubuntu2204-0.7.1_0.7.1-1_arm64.deb \
+    && cp /var/cudss-local-tegra-repo-ubuntu2204-0.7.1/cudss-*-keyring.gpg /usr/share/keyrings/ \
+    && rm cudss-local-tegra-repo-ubuntu2204-0.7.1_0.7.1-1_arm64.deb \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.10 python3.10-dev python3-pip gcc libopenblas-dev \
+        cudss \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.10 /usr/local/bin/python \
     && ln -sf /usr/bin/pip3 /usr/local/bin/pip
