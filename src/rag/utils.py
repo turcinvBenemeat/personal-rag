@@ -5,7 +5,10 @@ Imported before chromadb in every entry point — module-level code suppresses
 ChromaDB telemetry noise at startup.
 """
 
+import logging
 import os
+import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # Suppress ChromaDB/posthog telemetry before chromadb is imported anywhere.
@@ -62,3 +65,52 @@ def load_config() -> dict:
         cfg["index_path"] = index
 
     return cfg
+
+
+_LOG_CONFIGURED = False
+
+
+def setup_logging(config: dict | None = None, console: bool = True) -> logging.Logger:
+    """Configure and return the shared ``rag`` logger (console + rotating file).
+
+    The log file location is resolved in order:
+        RAG_LOG_PATH env var  →  config['log_path']  →  ./logs/rag.log
+
+    Console output stays plain (no timestamps) so the CLI looks unchanged; the
+    file handler adds timestamps and levels. Pass ``console=False`` to log only
+    to the file (used by the query CLI so its results stay clean on stdout).
+
+    Idempotent — safe to call more than once. Never raises on a bad log path:
+    it falls back to console-only logging and warns.
+    """
+    global _LOG_CONFIGURED
+    logger = logging.getLogger("rag")
+    if _LOG_CONFIGURED:
+        return logger
+
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    if console:
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(ch)
+
+    cfg = config or {}
+    log_path = os.environ.get("RAG_LOG_PATH") or cfg.get("log_path") or "logs/rag.log"
+    try:
+        log_path = Path(log_path).expanduser()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(
+            log_path, maxBytes=5_000_000, backupCount=3, encoding="utf-8"
+        )
+        fh.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S")
+        )
+        logger.addHandler(fh)
+        logger.info("Logging to %s", log_path)
+    except OSError as exc:
+        logger.warning("File logging disabled (%s): %s", log_path, exc)
+
+    _LOG_CONFIGURED = True
+    return logger

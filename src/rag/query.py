@@ -2,8 +2,9 @@
 
 import argparse
 import json
+import logging
 
-from .utils import load_config  # sets telemetry env var and patches posthog before chromadb loads
+from .utils import load_config, setup_logging  # sets telemetry env var and patches posthog before chromadb loads
 
 import chromadb
 from sentence_transformers import SentenceTransformer
@@ -52,6 +53,8 @@ def main():
 
     query = " ".join(args.query)
     config = load_config()
+    setup_logging(config, console=False)  # log to file only; results print to stdout
+    logger = logging.getLogger("rag")
     model_name      = config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
     index_path      = config.get("index_path", "./chroma_db")
     collection_name = config.get("collection_name", "obsidian_markdown")
@@ -78,6 +81,8 @@ def main():
     docs      = results["documents"][0]
     metas     = results["metadatas"][0]
     distances = results["distances"][0]
+
+    logger.info("query=%r n=%d filter=%s -> %d results", query, args.n_results, where, len(docs))
 
     if args.output_json:
         output = [

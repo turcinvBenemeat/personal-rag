@@ -7,6 +7,7 @@ All settings live in `config.yaml` at the project root. User-specific paths can 
 ```yaml
 vault_path: '/path/to/Obsidian Vault/'
 index_path: "./chroma_db"
+log_path: "./logs/rag.log"
 collection_name: "obsidian_markdown"
 
 exclude_dirs:
@@ -42,6 +43,7 @@ pdf_sources:
 |---|---|---|
 | `vault_path` | — | Obsidian vault root. Supports `~` and spaces. |
 | `index_path` | `./chroma_db` | ChromaDB persistent storage directory. |
+| `log_path` | `./logs/rag.log` | App log file (rotating, 5 MB × 3). Console output is unaffected. |
 | `collection_name` | `obsidian_markdown` | ChromaDB collection name. |
 | `exclude_dirs` | see above | Vault subdirectories to skip during indexing. |
 | `exclude_files` | `.DS_Store`, `CLAUDE.md` | Filenames to skip regardless of directory. |
@@ -63,6 +65,7 @@ Override any path without editing `config.yaml`. Copy `.env.example` to `.env` �
 | `RAG_PDF_BOOKS_PATH` | pdf_sources entry with `type: book` | |
 | `RAG_PDF_RESOURCES_PATH` | pdf_sources entry with `type: resource` | |
 | `RAG_INDEX_PATH` | `index_path` | Set to `/data/chroma` automatically in Docker. |
+| `RAG_LOG_PATH` | `log_path` | Set to `/data/logs/rag.log` automatically in Docker (bind-mounted to `./logs`). |
 | `RAG_CONFIG_PATH` | Path to `config.yaml` itself | Useful when running from a directory other than the project root. |
 
 ### .env example

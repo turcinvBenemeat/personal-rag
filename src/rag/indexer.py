@@ -2,11 +2,12 @@
 
 import gc
 import hashlib
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .utils import load_config  # sets telemetry env var and patches posthog before chromadb loads
+from .utils import load_config, setup_logging  # sets telemetry env var and patches posthog before chromadb loads
 
 import torch
 import chromadb
@@ -15,9 +16,8 @@ from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
 
-def log(msg: str) -> None:
-    """Print with immediate flush so progress is visible even when piped."""
-    print(msg, flush=True)
+logger = logging.getLogger("rag")
+log = logger.info  # bound to the shared 'rag' logger; configured by setup_logging() in main()
 
 
 def should_exclude(path: Path, vault_path: Path, config: dict) -> bool:
@@ -198,6 +198,7 @@ def embed_and_upsert(model, device, docs, ids, metas, embed_batch_size, collecti
 
 def main():
     config = load_config()
+    setup_logging(config)
 
     vault_path      = Path(config["vault_path"]).expanduser().resolve()
     index_path      = config.get("index_path", "./chroma_db")
