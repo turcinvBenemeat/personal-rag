@@ -28,8 +28,12 @@ RUN pip install --no-cache-dir torch torchvision \
     --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
 
 COPY requirements-jetson.txt pyproject.toml ./
-RUN pip install --no-cache-dir -r requirements-jetson.txt \
- && pip install --no-cache-dir -e . --no-deps
+# Ubuntu 22.04 ships pip 22 / setuptools 59 — too old for PEP 660 editable
+# installs. Upgrade the toolchain, then install the package without build
+# isolation so the modern setuptools is used as the build backend.
+RUN python -m pip install --no-cache-dir --upgrade pip "setuptools<82" wheel \
+ && pip install --no-cache-dir -r requirements-jetson.txt \
+ && pip install --no-cache-dir -e . --no-deps --no-build-isolation
 
 COPY src/ ./src/
 COPY tests/ ./tests/
