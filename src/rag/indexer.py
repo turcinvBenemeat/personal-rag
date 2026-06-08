@@ -192,23 +192,44 @@ def embed_and_upsert(model, device, docs, ids, metas, embed_batch_size, collecti
             log(f"      batch {batch_idx}/{n_batches}  ({min(i + embed_batch_size, n)}/{n} chunks)")
 
 
-def index_file_chunks(ids, docs, metas, existing_ids, seen_ids,
+def index_file_chunks(ids, docs, metas, existing_meta, seen_ids,
                       model, device, embed_batch, collection):
-    """Incrementally index one file's chunks.
+    """Incrementally index one file's chunks against the existing index.
 
     Records every chunk ID in ``seen_ids`` (used afterwards to prune stale
-    chunks), then embeds + upserts only chunks whose ID is not already in the
-    index. Identical content yields an identical ID, so unchanged chunks are
-    skipped. Returns (n_new, n_total)."""
+    chunks). Chunk IDs are content-hashed, so for each chunk:
+      - new ID                       -> embed + upsert
+      - existing ID, metadata changed -> refresh metadata only (no re-embed)
+      - existing ID, metadata same    -> skip
+
+    Embeddings depend only on the chunk body, so a metadata-only edit (e.g. a
+    note's frontmatter or a heading) is applied with collection.update without
+    paying to re-embed. Returns (n_new, n_updated, n_total)."""
     seen_ids.update(ids)
-    new = [k for k, cid in enumerate(ids) if cid not in existing_ids]
-    if not new:
-        return 0, len(ids)
-    n_ids   = [ids[k]   for k in new]
-    n_docs  = [docs[k]  for k in new]
-    n_metas = [metas[k] for k in new]
-    embed_and_upsert(model, device, n_docs, n_ids, n_metas, embed_batch, collection)
-    return len(n_ids), len(ids)
+    new_i = [k for k, cid in enumerate(ids) if cid not in existing_meta]
+    upd_i = [k for k, cid in enumerate(ids)
+             if cid in existing_meta and metas[k] != existing_meta[cid]]
+
+    if new_i:
+        embed_and_upsert(model, device,
+                         [docs[k] for k in new_i], [ids[k] for k in new_i],
+                         [metas[k] for k in new_i], embed_batch, collection)
+    if upd_i:
+        collection.update(ids=[ids[k] for k in upd_i],
+                          metadatas=[metas[k] for k in upd_i])
+    return len(new_i), len(upd_i), len(ids)
+
+
+def preserve_existing(path_value, existing_meta, seen_ids):
+    """Mark a source's already-indexed chunks as seen so the stale-prune step
+    does not delete good data when that file's extraction fails this run."""
+    seen_ids.update(cid for cid, m in existing_meta.items() if m.get("path") == path_value)
+
+
+def _index_status(n_new, n_upd, n_total):
+    if n_new or n_upd:
+        return f"{n_new} new, {n_upd} meta / {n_total} chunks"
+    return f"unchanged, {n_total} chunks"
 
 
 # ---------------------------------------------------------------------------
@@ -250,16 +271,20 @@ def main():
     )
     collection = client.get_or_create_collection(name=collection_name)
 
-    # Incremental indexing: snapshot the IDs already in the index. Chunks whose
-    # content is unchanged keep the same (content-hashed) ID and are skipped;
-    # every ID we encounter this run is recorded in seen_ids so that anything
-    # left over (edited or deleted sources) can be pruned at the end.
-    existing_ids = set(collection.get(include=[])["ids"])
+    # Incremental indexing: snapshot the IDs + metadata already in the index.
+    # Chunk IDs are content-hashed, so unchanged body text keeps the same ID;
+    # each chunk is then embedded (new), metadata-refreshed (same body, changed
+    # metadata), or skipped (identical). Every ID seen this run is recorded so
+    # leftovers (edited or deleted sources) can be pruned at the end.
+    _snap = collection.get(include=["metadatas"])
+    existing_meta = dict(zip(_snap["ids"], _snap["metadatas"]))
+    existing_ids = set(existing_meta)
     seen_ids = set()
     log(f"Existing chunks in index: {len(existing_ids)}")
 
-    total_chunks = 0   # chunks present this run (new + skipped)
-    total_new = 0      # chunks actually embedded this run
+    total_chunks = 0     # chunks across successfully-extracted files this run
+    total_new = 0        # chunks embedded this run
+    total_updated = 0    # chunks whose metadata was refreshed (no re-embed)
 
     # --- Markdown ---
     md_files = [f for f in sorted(vault_path.rglob("*.md")) if not should_exclude(f, vault_path, config)]
@@ -271,15 +296,16 @@ def main():
             ids, docs, metas, err = future.result()
             if err:
                 log(f"  [{file_idx}/{len(md_files)}] SKIP {md_file.name}: {err.split(':', 1)[-1].strip()}")
+                preserve_existing(md_file.relative_to(vault_path).as_posix(), existing_meta, seen_ids)
                 continue
             if not docs:
                 continue
-            n_new, n_total = index_file_chunks(ids, docs, metas, existing_ids, seen_ids,
-                                               model, device, embed_batch, collection)
-            status = f"{n_new} new / {n_total} chunks" if n_new else f"unchanged, {n_total} chunks"
-            log(f"  [{file_idx}/{len(md_files)}] {md_file.name}  ({status})")
-            total_chunks += n_total
-            total_new    += n_new
+            n_new, n_upd, n_total = index_file_chunks(ids, docs, metas, existing_meta, seen_ids,
+                                                      model, device, embed_batch, collection)
+            log(f"  [{file_idx}/{len(md_files)}] {md_file.name}  ({_index_status(n_new, n_upd, n_total)})")
+            total_chunks  += n_total
+            total_new     += n_new
+            total_updated += n_upd
             del ids, docs, metas
             gc.collect()
 
@@ -305,15 +331,16 @@ def main():
                 ids, docs, metas, err = future.result()
                 if err:
                     log(f"  [{file_idx}/{len(pdf_files)}] SKIP {pdf_file.name}: {err.split(':', 1)[-1].strip()}")
+                    preserve_existing(pdf_file.name, existing_meta, seen_ids)
                     continue
                 if not docs:
                     continue
-                n_new, n_total = index_file_chunks(ids, docs, metas, existing_ids, seen_ids,
-                                                   model, device, embed_batch, collection)
-                status = f"{n_new} new / {n_total} chunks" if n_new else f"unchanged, {n_total} chunks"
-                log(f"  [{file_idx}/{len(pdf_files)}] {pdf_file.name}  ({status})")
+                n_new, n_upd, n_total = index_file_chunks(ids, docs, metas, existing_meta, seen_ids,
+                                                          model, device, embed_batch, collection)
+                log(f"  [{file_idx}/{len(pdf_files)}] {pdf_file.name}  ({_index_status(n_new, n_upd, n_total)})")
                 total_chunks  += n_total
                 total_new     += n_new
+                total_updated += n_upd
                 source_chunks += n_total
                 source_new    += n_new
                 del ids, docs, metas
@@ -332,7 +359,8 @@ def main():
         log(f"Removed {len(stale)} stale chunks (edited or deleted sources)")
 
     log(f"\nIndexing complete. Index now holds {len(seen_ids)} chunks "
-        f"({total_new} embedded, {total_chunks - total_new} unchanged, {len(stale)} removed).")
+        f"({total_new} embedded, {total_updated} metadata-updated, "
+        f"{total_chunks - total_new - total_updated} unchanged, {len(stale)} removed).")
 
 
 if __name__ == "__main__":

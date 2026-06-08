@@ -54,11 +54,15 @@ SHA-256 of `(path, section_index, chunk_index, chunk)` — the full chunk text i
 
 The collection is opened with `get_or_create_collection` — never wiped. Each run:
 
-1. Snapshots the IDs already in the collection.
-2. For every chunk, records its ID as "seen" and embeds + upserts it only if the ID is not already present (unchanged chunks are skipped — no re-embedding).
-3. After all sources are processed, deletes any indexed ID that was not seen this run — pruning chunks from edited files (old content) and from deleted files.
+1. Snapshots the IDs **and metadata** already in the collection.
+2. For every chunk, records its ID as "seen" and then, since the ID is a hash of the body only:
+   - **new ID** → embed + upsert;
+   - **existing ID, metadata changed** → `collection.update` refreshes the metadata *without re-embedding* (embeddings depend only on the body, so a frontmatter or heading edit is cheap);
+   - **existing ID, metadata identical** → skip.
+3. If a file's extraction *fails* (parse/read error), its already-indexed chunks are marked "seen" so they are preserved — a transient error never deletes good data. Files that legitimately become empty are not preserved and are pruned.
+4. After all sources are processed, deletes any indexed ID that was not seen this run — pruning chunks from edited files (old content) and from deleted files.
 
-Re-running on an unchanged vault embeds nothing. Changing `chunk_max_chars`/`chunk_overlap_chars` changes every chunk's text and therefore every ID, so the next run re-embeds everything and prunes the old chunks — effectively a clean rebuild.
+Re-running on an unchanged vault embeds nothing. Editing only a note's frontmatter/heading updates metadata with no re-embedding. Changing `chunk_max_chars`/`chunk_overlap_chars` changes every chunk's text and therefore every ID, so the next run re-embeds everything and prunes the old chunks — effectively a clean rebuild.
 
 ## Query (`src/rag/query.py`)
 
