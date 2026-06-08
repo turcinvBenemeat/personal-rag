@@ -43,5 +43,4 @@ ENV HF_HOME=/data/hf-cache
 ENV TRANSFORMERS_CACHE=/data/hf-cache
 ENV RAG_INDEX_PATH=/data/chroma
 
-ENTRYPOINT ["python", "-m"]
-CMD ["rag.query", "--help"]
+CMD ["python", "-m", "rag.query", "--help"]
