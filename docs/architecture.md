@@ -23,7 +23,7 @@ PDF books & resources  ─┘         │
                                    │
                                    ▼
                         Top-N chunks by cosine similarity
-                        optional metadata filter (--domain / --type / --source)
+                        optional metadata filter (--domain / --type / --source / --confidence)
 ```
 
 ## Streaming indexer (`src/rag/indexer.py`)
@@ -82,6 +82,7 @@ Re-running on an unchanged vault embeds nothing. Editing only a note's frontmatt
 | `domain` | frontmatter | `DevOps` |
 | `status` | frontmatter | `processed` |
 | `source` | frontmatter or `pdf` | `ChatGPT`, `pdf` |
+| `confidence` | frontmatter (empty for PDFs) | `high`, `medium` |
 | `tags` | frontmatter | `kubernetes, containers` |
 | `wikilinks` | extracted from body | `K3s, Docker` |
 

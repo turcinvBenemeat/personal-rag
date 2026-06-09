@@ -4,7 +4,7 @@ Local semantic search over an Obsidian knowledge vault and PDF book library. Ind
 
 ## What it indexes
 
-- **Obsidian vault** — Markdown notes with YAML frontmatter (type, domain, status, tags, wikilinks)
+- **Obsidian vault** — Markdown notes with YAML frontmatter (type, domain, status, source, confidence, tags, wikilinks)
 - **PDF books** — technical books from `mindmap/Books/`
 - **PDF resources** — papers, guides, and reference materials from `mindmap/Resources/`
 
@@ -78,10 +78,11 @@ make query Q="What do I know about Kubernetes?"
 # or: .venv/bin/rag-query "your question" -n 12
 ```
 
-**Metadata filters** narrow results to a specific domain, type, or source:
+**Metadata filters** narrow results to a specific domain, type, source, or confidence:
 
 ```bash
 .venv/bin/rag-query "container orchestration" --domain DevOps
+.venv/bin/rag-query "container orchestration" --domain DevOps --confidence high
 .venv/bin/rag-query "neural networks" --source pdf --type book
 .venv/bin/rag-query "RAG pipeline" --json
 ```
@@ -198,7 +199,7 @@ PDF books & resources  ─┘         │
                                    │
                                    ▼
                         Top-N chunks by cosine similarity
-                        optional metadata filter (--domain / --type / --source)
+                        optional metadata filter (--domain / --type / --source / --confidence)
 ```
 
 ## Metadata per chunk
@@ -212,6 +213,7 @@ PDF books & resources  ─┘         │
 | `domain` | frontmatter | `DevOps` |
 | `status` | frontmatter | `processed` |
 | `source` | frontmatter or `pdf` | `ChatGPT`, `pdf` |
+| `confidence` | frontmatter (empty for PDFs) | `high`, `medium` |
 | `tags` | frontmatter | `kubernetes, containers` |
 | `wikilinks` | extracted from body | `K3s, Docker` |
 
