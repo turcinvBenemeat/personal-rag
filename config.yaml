@@ -1,5 +1,6 @@
 vault_path: '/Users/turcinv/Library/CloudStorage/GoogleDrive-turcinv@btlnet.com/My Drive/mindmap/Career Knowledge Base/'
 index_path: "./chroma_db"
+log_path: "./logs/rag.log"   # app log file (rotating); override with RAG_LOG_PATH (set in Docker)
 collection_name: "obsidian_markdown"
 
 include_extensions:

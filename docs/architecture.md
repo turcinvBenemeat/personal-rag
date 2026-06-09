@@ -48,11 +48,21 @@ The pipeline is **fully streaming** — no global accumulation of chunks in RAM.
 
 ### Stable chunk IDs
 
-SHA-256 of `(path, section_index, chunk_index, chunk[:80])` — deterministic across reruns for the same content.
+SHA-256 of `(path, section_index, chunk_index, chunk)` — the full chunk text is hashed, so identical content always yields the same ID and any edit yields a new one. This is what makes incremental indexing reliable.
 
-### Collection lifecycle
+### Collection lifecycle (incremental)
 
-Delete-then-recreate at the start of every full reindex. Intentional for MVP simplicity.
+The collection is opened with `get_or_create_collection` — never wiped. Each run:
+
+1. Snapshots the IDs **and metadata** already in the collection.
+2. For every chunk, records its ID as "seen" and then, since the ID is a hash of the body only:
+   - **new ID** → embed + upsert;
+   - **existing ID, metadata changed** → `collection.update` refreshes the metadata *without re-embedding* (embeddings depend only on the body, so a frontmatter or heading edit is cheap);
+   - **existing ID, metadata identical** → skip.
+3. If a file's extraction *fails* (parse/read error), its already-indexed chunks are marked "seen" so they are preserved — a transient error never deletes good data. Files that legitimately become empty are not preserved and are pruned.
+4. After all sources are processed, deletes any indexed ID that was not seen this run — pruning chunks from edited files (old content) and from deleted files.
+
+Re-running on an unchanged vault embeds nothing. Editing only a note's frontmatter/heading updates metadata with no re-embedding. Changing `chunk_max_chars`/`chunk_overlap_chars` changes every chunk's text and therefore every ID, so the next run re-embeds everything and prunes the old chunks — effectively a clean rebuild.
 
 ## Query (`src/rag/query.py`)
 

@@ -5,7 +5,12 @@ Imported before chromadb in every entry point — module-level code suppresses
 ChromaDB telemetry noise at startup.
 """
 
+import logging
 import os
+import sqlite3
+import sys
+import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # Suppress ChromaDB/posthog telemetry before chromadb is imported anywhere.
@@ -62,3 +67,100 @@ def load_config() -> dict:
         cfg["index_path"] = index
 
     return cfg
+
+
+_LOG_CONFIGURED = False
+
+
+class _SQLiteHandler(logging.Handler):
+    """Logging handler that appends each record to a SQLite ``logs`` table.
+
+    Columns: id, ts (local time), level, logger, message. logging serializes
+    emit() with the handler lock, so a single shared connection is safe.
+    """
+
+    def __init__(self, db_path: Path):
+        super().__init__()
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS logs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "ts TEXT NOT NULL, level TEXT NOT NULL, "
+            "logger TEXT NOT NULL, message TEXT NOT NULL)"
+        )
+        self._conn.commit()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.created))
+            self._conn.execute(
+                "INSERT INTO logs (ts, level, logger, message) VALUES (?, ?, ?, ?)",
+                (ts, record.levelname, record.name, record.getMessage()),
+            )
+            self._conn.commit()
+        except Exception:
+            self.handleError(record)
+
+    def close(self) -> None:
+        try:
+            self._conn.close()
+        finally:
+            super().close()
+
+
+def setup_logging(config: dict | None = None, console: bool = True) -> logging.Logger:
+    """Configure and return the shared ``rag`` logger.
+
+    Attaches three handlers: a plain console handler (no timestamps, so the CLI
+    looks unchanged), a rotating text file handler, and a SQLite handler that
+    stores structured records. Paths are resolved as:
+        text:    RAG_LOG_PATH    → config['log_path']    → ./logs/rag.log
+        sqlite:  RAG_LOG_DB_PATH → config['log_db_path'] → <text path>.sqlite
+
+    Pass ``console=False`` to skip the console handler (used by the query CLI so
+    its results stay clean on stdout). Idempotent — safe to call more than once.
+    Never raises on a bad path: it disables that handler and warns.
+    """
+    global _LOG_CONFIGURED
+    logger = logging.getLogger("rag")
+    if _LOG_CONFIGURED:
+        return logger
+
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    if console:
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(ch)
+
+    cfg = config or {}
+    log_path = Path(
+        os.environ.get("RAG_LOG_PATH") or cfg.get("log_path") or "logs/rag.log"
+    ).expanduser()
+
+    # Rotating text log.
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+        fh.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S")
+        )
+        logger.addHandler(fh)
+    except OSError as exc:
+        logger.warning("File logging disabled (%s): %s", log_path, exc)
+
+    # Structured SQLite log, alongside the text file.
+    db_path = Path(
+        os.environ.get("RAG_LOG_DB_PATH") or cfg.get("log_db_path")
+        or log_path.with_suffix(".sqlite")
+    ).expanduser()
+    try:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.addHandler(_SQLiteHandler(db_path))
+    except (OSError, sqlite3.Error) as exc:
+        logger.warning("SQLite logging disabled (%s): %s", db_path, exc)
+
+    _LOG_CONFIGURED = True
+    logger.info("Logging to %s (+ %s)", log_path, db_path)
+    return logger

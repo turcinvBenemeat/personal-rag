@@ -1,5 +1,6 @@
 .venv/
 chroma_db/
+logs/
 __pycache__/
 *.pyc
 .DS_Store

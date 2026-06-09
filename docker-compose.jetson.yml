@@ -21,6 +21,7 @@ services:
     volumes:
       - chroma:/data/chroma
       - hf-cache:/data/hf-cache
+      - ./logs:/data/logs                      # app logs, readable on the host
       - ${RAG_VAULT_PATH:-/tmp}:/vault:ro
       - ${RAG_PDF_BOOKS_PATH:-/tmp}:/books:ro
       - ${RAG_PDF_RESOURCES_PATH:-/tmp}:/resources:ro
@@ -29,6 +30,7 @@ services:
       RAG_PDF_BOOKS_PATH: /books
       RAG_PDF_RESOURCES_PATH: /resources
       RAG_INDEX_PATH: /data/chroma
+      RAG_LOG_PATH: /data/logs/rag.log
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
