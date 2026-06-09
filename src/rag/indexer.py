@@ -106,6 +106,7 @@ def extract_md_file(md_file: Path, vault_path: Path, config: dict, max_chars: in
     domain = str(meta.get("domain") or "")
     status = str(meta.get("status") or "")
     source = str(meta.get("source") or "")
+    confidence = str(meta.get("confidence") or "")
     tags_value = meta.get("tags") or []
     tags = ", ".join(str(t) for t in tags_value) if isinstance(tags_value, list) else str(tags_value)
     wikilinks = ", ".join(extract_wikilinks(body))
@@ -119,7 +120,8 @@ def extract_md_file(md_file: Path, vault_path: Path, config: dict, max_chars: in
             metadatas.append({
                 "path": rel_path, "title": title, "heading": heading,
                 "type": note_type, "domain": domain, "status": status,
-                "source": source, "tags": tags, "wikilinks": wikilinks,
+                "source": source, "confidence": confidence,
+                "tags": tags, "wikilinks": wikilinks,
             })
     return ids, documents, metadatas, None
 
@@ -148,7 +150,8 @@ def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: 
             metadatas.append({
                 "path": pdf_path.name, "title": title, "heading": heading,
                 "type": source_type, "domain": "", "status": "",
-                "source": "pdf", "tags": "", "wikilinks": "",
+                "source": "pdf", "confidence": "",
+                "tags": "", "wikilinks": "",
             })
 
     for page_num, page in enumerate(reader.pages, 1):

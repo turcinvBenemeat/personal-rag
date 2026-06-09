@@ -86,7 +86,7 @@ personal-rag/
 
 - Collection: `obsidian_markdown`
 - ~7,600 MD chunks + PDF chunks from 175 books and 35 resources (as of 2026-06-04)
-- Metadata fields: `path`, `title`, `heading`, `type`, `domain`, `status`, `source`, `tags`, `wikilinks`
+- Metadata fields: `path`, `title`, `heading`, `type`, `domain`, `status`, `source`, `confidence`, `tags`, `wikilinks`
 - `source: pdf` distinguishes PDF chunks from Markdown chunks
 - Reindexing is incremental: chunk IDs are a SHA-256 of the full chunk content, so unchanged chunks are skipped, changed/new ones are embedded, and stale chunks (edited or deleted sources) are pruned. The collection is never wiped.
 

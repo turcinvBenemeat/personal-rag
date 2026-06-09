@@ -12,11 +12,15 @@ exclude_dirs:
   - "Resources/_catalog"
   - "Attachments"
   - "Archive"
+  - "Templates"
   - ".git"
 
 exclude_files:
   - ".DS_Store"
   - "CLAUDE.md"
+  - "Dashboard.md"
+  - "Home.md"
+  - "README.md"
 
 chunk_max_chars: 1200
 chunk_overlap_chars: 150

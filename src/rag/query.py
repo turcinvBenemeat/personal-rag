@@ -10,7 +10,7 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 
 
-def build_where(domain=None, type_=None, source=None):
+def build_where(domain=None, type_=None, source=None, confidence=None):
     """Build a ChromaDB metadata filter from optional field constraints."""
     filters = []
     if domain:
@@ -19,6 +19,8 @@ def build_where(domain=None, type_=None, source=None):
         filters.append({"type": {"$eq": type_}})
     if source:
         filters.append({"source": {"$eq": source}})
+    if confidence:
+        filters.append({"confidence": {"$eq": confidence}})
     if not filters:
         return None
     if len(filters) == 1:
@@ -34,6 +36,7 @@ def main():
   rag-query "What do I know about Kubernetes?"
   rag-query "secrets in Python" -n 12
   rag-query "Kubernetes" --domain DevOps
+  rag-query "deployment" --domain DevOps --confidence high
   rag-query "book recommendations" --source pdf --type book
   rag-query "RAG pipeline" --json
 """,
@@ -47,6 +50,8 @@ def main():
                         help="Filter by type metadata (e.g. book, resource, Knowledge)")
     parser.add_argument("--source", default=None,
                         help="Filter by source metadata (e.g. pdf)")
+    parser.add_argument("--confidence", default=None,
+                        help="Filter by confidence metadata (e.g. high, medium)")
     parser.add_argument("--json", dest="output_json", action="store_true",
                         help="Output results as a JSON array")
     args = parser.parse_args()
@@ -68,7 +73,7 @@ def main():
     )
     collection = client.get_collection(collection_name)
 
-    where = build_where(args.domain, args.type_, args.source)
+    where = build_where(args.domain, args.type_, args.source, args.confidence)
     query_kwargs = dict(
         query_embeddings=[query_embedding],
         n_results=args.n_results,
@@ -102,7 +107,7 @@ def main():
         print("=" * 80)
         print(f"{i}. {meta.get('title')} - {meta.get('heading')}")
         print(f"Path: {meta.get('path')}")
-        print(f"Type: {meta.get('type')} | Domain: {meta.get('domain')} | Status: {meta.get('status')}")
+        print(f"Type: {meta.get('type')} | Domain: {meta.get('domain')} | Status: {meta.get('status')} | Confidence: {meta.get('confidence')}")
         print(f"Distance: {distance:.4f}")
         print("-" * 80)
         print(doc[:1200].strip())

@@ -16,11 +16,15 @@ exclude_dirs:
   - "Resources/_catalog"
   - "Attachments"
   - "Archive"
+  - "Templates"
   - ".git"
 
 exclude_files:
   - ".DS_Store"
   - "CLAUDE.md"
+  - "Dashboard.md"
+  - "Home.md"
+  - "README.md"
 
 chunk_max_chars: 1200
 chunk_overlap_chars: 150
@@ -47,7 +51,7 @@ pdf_sources:
 | `log_db_path` | `<log_path>.sqlite` | Structured SQLite log DB (`logs` table). Defaults alongside `log_path`. |
 | `collection_name` | `obsidian_markdown` | ChromaDB collection name. |
 | `exclude_dirs` | see above | Vault subdirectories to skip during indexing. |
-| `exclude_files` | `.DS_Store`, `CLAUDE.md` | Filenames to skip regardless of directory. |
+| `exclude_files` | `.DS_Store`, `CLAUDE.md`, `Dashboard.md`, `Home.md`, `README.md` | Filenames to skip regardless of directory (e.g. vault hub/navigation pages). |
 | `chunk_max_chars` | `1200` | Maximum characters per chunk. Smaller = lower per-file RAM peak. |
 | `chunk_overlap_chars` | `150` | Character overlap between consecutive chunks. |
 | `embedding_model` | `all-MiniLM-L6-v2` | SentenceTransformers model name or HuggingFace path. |
