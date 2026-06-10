@@ -47,6 +47,40 @@ def test_should_exclude_dirs_and_files(tmp_path):
     assert not should_exclude(tmp_path / "Knowledge" / "k.md", tmp_path, cfg)
 
 
+def test_should_exclude_filename_patterns_catch_mocs(tmp_path):
+    cfg = {"exclude_filename_patterns": ["* MOC.md"]}
+    assert should_exclude(tmp_path / "Knowledge" / "DevOps MOC.md", tmp_path, cfg)
+    assert should_exclude(tmp_path / "Knowledge" / "Edge & IoT MOC.md", tmp_path, cfg)
+    assert not should_exclude(tmp_path / "Knowledge" / "MOC Design Note.md", tmp_path, cfg)
+
+
+def test_extract_md_strips_nav_tail_but_keeps_links_in_metadata(tmp_path):
+    note = tmp_path / "n.md"
+    note.write_text(
+        "---\ntitle: N\n---\n# Summary\nuses [[K3s|k3s cluster]] daily\n"
+        "# Related Topics\n- [[Docker]]\n## Potential New Notes\n- [[Future Note]]",
+        encoding="utf-8",
+    )
+    ids, docs, metas, err = extract_md_file(note, tmp_path, {}, 1200, 150)
+    assert err is None and len(docs) == 1
+    # embedded text: tail gone, wikilink syntax resolved to alias
+    assert docs[0] == "uses k3s cluster daily"
+    # graph signal: links from the FULL body survive in metadata
+    assert "Docker" in metas[0]["wikilinks"]
+    assert "K3s" in metas[0]["wikilinks"]
+
+
+def test_extract_md_nav_only_note_yields_nothing(tmp_path):
+    note = tmp_path / "nav.md"
+    note.write_text(
+        "---\ntitle: NavOnly\n---\n# Related Topics\n- [[A]]\n- [[B]]",
+        encoding="utf-8",
+    )
+    ids, docs, metas, err = extract_md_file(note, tmp_path, {}, 1200, 150)
+    assert err is None
+    assert docs == []
+
+
 # --- JSON -------------------------------------------------------------------
 
 def test_extract_json_maps_metadata(tmp_path):

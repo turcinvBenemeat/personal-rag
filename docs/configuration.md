@@ -14,6 +14,7 @@ exclude_dirs:
   - ".obsidian"
   - ".trash"
   - "Resources/_catalog"
+  - "Resources/Generated"
   - "Attachments"
   - "Archive"
   - "Templates"
@@ -25,6 +26,9 @@ exclude_files:
   - "Dashboard.md"
   - "Home.md"
   - "README.md"
+
+exclude_filename_patterns:
+  - "* MOC.md"
 
 chunk_max_chars: 1200
 chunk_overlap_chars: 150
@@ -53,15 +57,16 @@ json_sources:
 | `log_path` | `./logs/rag.log` | App log file (rotating, 5 MB × 3). Console output is unaffected. |
 | `log_db_path` | `<log_path>.sqlite` | Structured SQLite log DB (`logs` table). Defaults alongside `log_path`. |
 | `collection_name` | `obsidian_markdown` | ChromaDB collection name. |
-| `exclude_dirs` | see above | Vault subdirectories to skip during indexing. |
+| `exclude_dirs` | see above | Vault subdirectories to skip during indexing. `Resources/Generated` holds auto-generated catalog stubs (Resource Notes, Topic MOCs, Learning Paths) whose underlying book/resource content is already fully indexed via `json_sources`. |
 | `exclude_files` | `.DS_Store`, `CLAUDE.md`, `Dashboard.md`, `Home.md`, `README.md` | Filenames to skip regardless of directory (e.g. vault hub/navigation pages). |
+| `exclude_filename_patterns` | `* MOC.md` | fnmatch patterns applied to filenames in any directory. Used to skip domain MOCs — navigation-only wikilink indexes whose chunks would match many queries spuriously. The per-note link graph is still captured in the `wikilinks` metadata field. |
 | `chunk_max_chars` | `1200` | Maximum characters per chunk. Smaller = lower per-file RAM peak. |
 | `chunk_overlap_chars` | `150` | Character overlap between consecutive chunks. |
 | `embedding_model` | `all-MiniLM-L6-v2` | SentenceTransformers model name or HuggingFace path. |
 | `embedding_batch_size` | `16` | Chunks per `model.encode()` call. Keep at 16 on Jetson (8 GB unified RAM). |
 | `markdown_workers` | `1` | ThreadPoolExecutor threads for MD extraction. 1 = sequential. |
 | `pdf_workers` | `1` | ThreadPoolExecutor threads for PDF extraction. Keep at 1 on Jetson. |
-| `pdf_sources` | `[]` | List of `{path, type}` PDF source directories. `type` is stored as chunk metadata. |
+| `pdf_sources` | `[]` | List of `{path, type}` PDF source directories. `type` is stored as chunk metadata. Acts as a **fallback**: files whose name is already covered by a `json_sources` document are skipped, so configuring both never double-indexes. |
 | `json_sources` | `[]` | List of `{path}` dirs of pre-extracted document JSON (`doc-text-extractor` `indexed/*.json`): full `text` + metadata (title, primary_topic→domain, resource_type→type, tags, confidence). Deterministic, so re-runs are idempotent. |
 
 ## Environment variables

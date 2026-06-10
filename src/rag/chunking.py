@@ -9,6 +9,29 @@ def extract_wikilinks(text: str):
     return sorted(set(re.findall(r"\[\[([^\]|#]+)", text)))
 
 
+# Vault convention: every note ends with navigation-only sections ("# Related
+# Topics" and "## Potential New Notes") that are pure wikilink lists. They carry
+# graph structure (captured separately via extract_wikilinks) but no semantic
+# content — embedding them dilutes retrieval with title soup (~16% of corpus).
+_NAV_TAIL = re.compile(r"(?m)^#{1,6}\s*(Related Topics|Potential New Notes)\s*$")
+
+
+def strip_navigation_tail(text: str) -> str:
+    """Drop everything from the first navigation heading to the end of the note."""
+    m = _NAV_TAIL.search(text)
+    return text[: m.start()].rstrip() if m else text
+
+
+def strip_wikilink_syntax(text: str) -> str:
+    """Inline [[target|alias]] -> alias, [[target]] -> target.
+
+    Embedding models see plain words instead of bracket noise; the link graph
+    itself is preserved in chunk metadata by extract_wikilinks (run it first).
+    """
+    text = re.sub(r"\[\[[^\]|]+\|([^\]]+)\]\]", r"\1", text)
+    return re.sub(r"\[\[([^\]]+)\]\]", r"\1", text)
+
+
 def split_by_headings(text: str):
     sections = []
     current_heading = "Document"

@@ -52,6 +52,34 @@ docker compose -f docker-compose.jetson.yml run --rm rag python -m rag.query "yo
 
 The Jetson Compose file sets `runtime: nvidia`, `NVIDIA_VISIBLE_DEVICES=all`, and `NVIDIA_DRIVER_CAPABILITIES=compute,utility` for full GPU access inside the container.
 
+## Data on the Jetson
+
+The compose file mounts host paths from a `.env` in the project root **on the Jetson**.
+Only two datasets are required — book/resource PDFs are optional because their content
+ships in the pre-extracted JSON (PDF sources are just a fallback for files the
+extraction pipeline hasn't covered yet):
+
+| Mount | `.env` variable | Required? | How to get it onto the Jetson |
+|---|---|---|---|
+| Vault (Markdown notes) | `RAG_VAULT_PATH` | ✅ | `git clone` the Career Knowledge Base repo (or `rsync -a` from the workstation) |
+| Pre-extracted JSON | `RAG_JSON_PATH` | ✅ | `rsync -a ~/Documents/knowledge-base-index/indexed/ jetson:~/data/indexed/` |
+| Books PDFs | `RAG_PDF_BOOKS_PATH` | optional | only needed to live-parse *new* PDFs not yet in the JSON |
+| Resources PDFs | `RAG_PDF_RESOURCES_PATH` | optional | same fallback role |
+
+```bash
+# .env on the Jetson (paths are examples)
+RAG_VAULT_PATH=/home/turcinv/data/career-knowledge-base
+RAG_JSON_PATH=/home/turcinv/data/indexed
+# Optional fallback mounts — omit to skip live PDF parsing entirely:
+# RAG_PDF_BOOKS_PATH=/home/turcinv/data/books
+# RAG_PDF_RESOURCES_PATH=/home/turcinv/data/resources
+```
+
+Unset variables default to `/tmp` in the compose file, which simply yields an empty
+source. Re-running `make jetson-index` after a vault sync is incremental: chunk IDs
+are content-hashed, so unchanged notes are skipped and chunks from deleted/edited
+notes are pruned automatically — no need to wipe the `chroma` volume.
+
 ## Memory budget
 
 With 8 GB unified RAM shared between CPU and GPU, keep these config values:

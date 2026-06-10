@@ -84,3 +84,29 @@ def test_run_source_end_to_end_is_idempotent(tmp_path):
     second = run()
     assert first[0] > 0          # first run embeds the (non-excluded) note
     assert second == (0, 0, 0)   # nothing changed -> no work, nothing pruned
+
+
+def test_pdf_sources_fall_back_behind_json_coverage(tmp_path):
+    """A PDF whose file_name is covered by a json_source is skipped: the
+    pre-extracted JSON (full text + enriched metadata) wins; live PDF parsing
+    only handles files the extraction pipeline hasn't processed yet."""
+    import json
+
+    pdf_dir = tmp_path / "Books"; pdf_dir.mkdir()
+    (pdf_dir / "covered.pdf").write_bytes(b"%PDF-1.4")
+    (pdf_dir / "new-arrival.pdf").write_bytes(b"%PDF-1.4")
+    json_dir = tmp_path / "indexed"; json_dir.mkdir()
+    (json_dir / "covered.json").write_text(
+        json.dumps({"file_name": "covered.pdf", "title": "Covered", "text": "x"}),
+        encoding="utf-8")
+
+    config = {
+        "vault_path": str(tmp_path), "exclude_dirs": [], "exclude_files": [],
+        "pdf_sources": [{"path": str(pdf_dir), "type": "book"}],
+        "json_sources": [{"path": str(json_dir)}],
+    }
+    sources = {s.kind: s for s in iter_sources(config, tmp_path, 1200, 150)}
+    pdf_files = [f.name for f in sources["pdf"].files]
+    assert pdf_files == ["new-arrival.pdf"]
+    assert "covered by JSON, skipped" in sources["pdf"].label
+    assert len(sources["json"].files) == 1

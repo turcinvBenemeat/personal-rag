@@ -1,4 +1,7 @@
-vault_path: '/Users/turcinv/Library/CloudStorage/GoogleDrive-turcinv@btlnet.com/My Drive/mindmap/Career Knowledge Base/'
+# Canonical maintained checkout (the Google Drive copy at mindmap/Career Knowledge Base
+# has a divergent, stale history — 1,042 vs 2,431 notes as of 2026-06-10; reconcile before
+# ever pointing back at it).
+vault_path: '/Users/turcinv/Documents/personal_knowledge/Career Knowledge Base/'
 index_path: "./chroma_db"
 log_path: "./logs/rag.log"   # app log file (rotating); override with RAG_LOG_PATH (set in Docker)
 collection_name: "obsidian_markdown"
@@ -10,6 +13,10 @@ exclude_dirs:
   - ".obsidian"
   - ".trash"
   - "Resources/_catalog"
+  # Auto-generated catalog stubs (214 Resource Notes, Books Index, Topic MOCs,
+  # Learning Paths). Book/resource CONTENT is indexed in full via json_sources —
+  # embedding these 146-word metadata stubs would only double-cover it with noise.
+  - "Resources/Generated"
   - "Attachments"
   - "Archive"
   - "Templates"
@@ -21,6 +28,12 @@ exclude_files:
   - "Dashboard.md"
   - "Home.md"
   - "README.md"
+
+# Navigation indexes, not knowledge: domain MOCs are giant wikilink lists whose
+# chunks match many queries spuriously ("title soup"). The link graph is already
+# captured per-note in chunk metadata (wikilinks field).
+exclude_filename_patterns:
+  - "* MOC.md"
 
 chunk_max_chars: 1200
 chunk_overlap_chars: 150
@@ -38,8 +51,10 @@ pdf_sources:
 
 # Pre-extracted book/resource JSON (doc-text-extractor `indexed/*.json`): full
 # text + enriched metadata (title, primary_topic, resource_type, tags, confidence).
-# Deterministic input — preferred over live PDF parsing. Override with RAG_JSON_PATH
-# (set automatically in Docker). To avoid double-indexing the same books, leave
-# pdf_sources empty when json_sources covers your library.
+# Deterministic input — always preferred over live PDF parsing. PDF sources act
+# as a FALLBACK: any file whose name is covered by a JSON document is skipped
+# automatically, so keeping both configured never double-indexes. New PDFs
+# dropped into Books/ are picked up live until the extraction pipeline runs.
+# Override with RAG_JSON_PATH (set automatically in Docker).
 json_sources:
   - path: '~/Documents/knowledge-base-index/indexed'

@@ -36,8 +36,38 @@ def _dir_source(kind, src, glob, workers, make_extract, make_preserve):
                   make_extract(src), make_preserve)
 
 
+def _json_covered_filenames(config: dict) -> set:
+    """``file_name`` of every document available as pre-extracted JSON.
+
+    These JSONs carry full text + enriched metadata, so they are always
+    preferred over parsing the original file live; PDF sources then act as a
+    fallback for files the extraction pipeline has not covered yet.
+    """
+    import json as _json
+
+    covered = set()
+    for src in config.get("json_sources", []):
+        d = Path(src["path"]).expanduser().resolve()
+        if not d.exists():
+            continue
+        for p in d.glob("*.json"):
+            try:
+                name = _json.loads(p.read_text(encoding="utf-8")).get("file_name")
+            except Exception:
+                continue
+            if name:
+                covered.add(name)
+    return covered
+
+
 def iter_sources(config: dict, vault_path: Path, max_chars: int, overlap: int):
-    """Yield a ``Source`` for the Markdown vault and every configured PDF/JSON dir."""
+    """Yield a ``Source`` for the Markdown vault and every configured PDF/JSON dir.
+
+    PDF sources are a *fallback*: any file whose name is already covered by a
+    ``json_sources`` document is skipped, so books/resources are indexed exactly
+    once (from the richer pre-extracted JSON) and live PDF parsing only handles
+    new files the doc-text-extractor pipeline hasn't processed yet.
+    """
     md_workers = int(config.get("markdown_workers", 1))
     pdf_workers = int(config.get("pdf_workers", 1))
 
@@ -49,14 +79,21 @@ def iter_sources(config: dict, vault_path: Path, max_chars: int, overlap: int):
         lambda f: f.relative_to(vault_path).as_posix(),
     )
 
-    # PDF source directories
+    json_covered = _json_covered_filenames(config)
+
+    # PDF source directories (fallback for files without pre-extracted JSON)
     for src in config.get("pdf_sources", []):
-        stype = src.get("type", "resource")
-        yield _dir_source(
+        source = _dir_source(
             "pdf", src, "*.pdf", pdf_workers,
             lambda s: (lambda f, t=s.get("type", "resource"): extract_pdf_file(f, t, max_chars, overlap)),
             lambda f: f.name,
         )
+        if json_covered and source.files:
+            kept = [f for f in source.files if f.name not in json_covered]
+            skipped = len(source.files) - len(kept)
+            label = source.label + (f" ({skipped} covered by JSON, skipped)" if skipped else "")
+            source = source._replace(files=kept, label=label)
+        yield source
 
     # Pre-extracted document JSON directories
     for src in config.get("json_sources", []):

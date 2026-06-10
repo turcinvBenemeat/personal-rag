@@ -1,11 +1,19 @@
 """Obsidian Markdown extractor — frontmatter + heading-aware chunking."""
 
 import re
+from fnmatch import fnmatch
 from pathlib import Path
 
 import frontmatter
 
-from ..chunking import chunk_text, extract_wikilinks, split_by_headings, stable_id
+from ..chunking import (
+    chunk_text,
+    extract_wikilinks,
+    split_by_headings,
+    stable_id,
+    strip_navigation_tail,
+    strip_wikilink_syntax,
+)
 
 
 def should_exclude(path: Path, vault_path: Path, config: dict) -> bool:
@@ -16,6 +24,9 @@ def should_exclude(path: Path, vault_path: Path, config: dict) -> bool:
             return True
     if path.name in config.get("exclude_files", []):
         return True
+    for pattern in config.get("exclude_filename_patterns", []):
+        if fnmatch(path.name, pattern):
+            return True
     return False
 
 
@@ -42,7 +53,13 @@ def extract_md_file(md_file: Path, vault_path: Path, config: dict, max_chars: in
     confidence = str(meta.get("confidence") or "")
     tags_value = meta.get("tags") or []
     tags = ", ".join(str(t) for t in tags_value) if isinstance(tags_value, list) else str(tags_value)
+    # Wikilinks come from the FULL body (incl. Related Topics) so the graph
+    # signal survives in metadata; the embedded text is then stripped of the
+    # navigation tail and link syntax so chunks carry only semantic content.
     wikilinks = ", ".join(extract_wikilinks(body))
+    body = strip_wikilink_syntax(strip_navigation_tail(body))
+    if not body.strip():
+        return [], [], [], None
     sections = split_by_headings(body)
 
     ids, documents, metadatas = [], [], []
