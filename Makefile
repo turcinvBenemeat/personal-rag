@@ -1,4 +1,4 @@
-.PHONY: help install index query test build build-jetson \
+.PHONY: help install index query test test-unit build build-jetson \
         docker-index docker-query docker-test \
         jetson-index jetson-query jetson-test
 
@@ -14,7 +14,8 @@ help:
 	@echo "Local:"
 	@echo "  make index              reindex vault + PDFs"
 	@echo "  make query Q=\"...\"      semantic query"
-	@echo "  make test [K=keyword]   smoke tests (optional keyword filter)"
+	@echo "  make test-unit          offline pytest unit suite"
+	@echo "  make test [K=keyword]   retrieval smoke tests (needs an index)"
 	@echo ""
 	@echo "Docker x86:"
 	@echo "  make build              build personal-rag:latest"
@@ -46,6 +47,9 @@ query:
 
 test:
 	$(PYTHON) tests/test_queries.py $(K)
+
+test-unit:
+	$(PYTHON) -m pytest tests/ -q
 
 # ── Docker x86 ────────────────────────────────────────────────────────────────
 
