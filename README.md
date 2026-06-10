@@ -1,5 +1,7 @@
 # personal-rag
 
+[![tests](https://github.com/turcinvBenemeat/personal-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/turcinvBenemeat/personal-rag/actions/workflows/ci.yml)
+
 Local semantic search over an Obsidian knowledge vault and PDF book library. Indexes Markdown notes and PDFs into a local ChromaDB vector store and retrieves relevant chunks by natural language query. Runs fully offline — optimised for NVIDIA Jetson Orin Nano Super (JetPack 6.2) and macOS/x86.
 
 ## What it indexes

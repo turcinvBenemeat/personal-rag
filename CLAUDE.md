@@ -24,7 +24,10 @@ make install          # creates .venv and installs package + deps
 .venv/bin/rag-query "your question" -n 12    # optional: number of results (default 8)
 .venv/bin/rag-query "Kubernetes" --domain DevOps
 
-# Run retrieval smoke tests
+# Run offline unit tests (pytest). Install dev deps first: uv pip install -e ".[dev]"
+make test-unit                      # or: .venv/bin/python -m pytest tests/
+
+# Run retrieval smoke tests (needs a populated index)
 .venv/bin/python tests/test_queries.py
 .venv/bin/python tests/test_queries.py kubernetes   # filter by keyword
 
@@ -54,7 +57,11 @@ personal-rag/
 │       ├── indexer.py        # main() orchestration (MD + PDF + JSON → ChromaDB); entry: rag-index
 │       └── query.py          # semantic query CLI; entry: rag-query
 ├── tests/
-│   └── test_queries.py       # 13-query smoke tests across all vault domains
+│   ├── test_chunking.py      # unit: chunking/ID helpers
+│   ├── test_extractors.py    # unit: markdown/pdf/json extractors
+│   ├── test_indexing.py      # unit: incremental engine + idempotency (fake model + temp chroma)
+│   └── test_queries.py       # 13-query retrieval smoke tests (needs a populated index)
+├── .github/workflows/ci.yml  # CI: runs the offline unit suite on push/PR (Python 3.12)
 ├── Dockerfile                # x86 / macOS container image
 ├── Dockerfile.jetson         # Jetson JetPack 6.2 container image (build on Jetson)
 ├── docker-compose.yml        # x86 Compose with volume mounts
