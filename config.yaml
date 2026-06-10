@@ -35,3 +35,11 @@ pdf_sources:
     type: book
   - path: '/Users/turcinv/Library/CloudStorage/GoogleDrive-turcinv@btlnet.com/My Drive/mindmap/Resources/'
     type: resource
+
+# Pre-extracted book/resource JSON (doc-text-extractor `indexed/*.json`): full
+# text + enriched metadata (title, primary_topic, resource_type, tags, confidence).
+# Deterministic input — preferred over live PDF parsing. Override with RAG_JSON_PATH
+# (set automatically in Docker). To avoid double-indexing the same books, leave
+# pdf_sources empty when json_sources covers your library.
+json_sources:
+  - path: '~/Documents/knowledge-base-index/indexed'

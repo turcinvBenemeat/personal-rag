@@ -4,7 +4,7 @@ Local retrieval index for an Obsidian knowledge vault + PDF books and resources 
 
 ## What this project does
 
-- Indexes Obsidian Markdown notes and PDF books/resources into a local ChromaDB collection
+- Indexes Obsidian Markdown notes and PDF books/resources (or pre-extracted document JSON) into a local ChromaDB collection
 - Retrieves relevant chunks by semantic similarity query
 - Fully offline — no cloud APIs used for indexing or retrieval
 
@@ -57,7 +57,7 @@ personal-rag/
 ├── .env                      # path overrides — never commit (see .env.example)
 ├── .env.example              # template for .env
 ├── .dockerignore
-├── config.yaml               # vault path, pdf sources, model, chunk settings
+├── config.yaml               # vault path, pdf + json sources, model, chunk settings
 ├── pyproject.toml            # package definition and CLI entry points
 ├── Makefile                  # shortcuts: make install/index/query/test, make build/docker-*/jetson-*
 ├── requirements-direct.txt   # direct deps only — use to regenerate lockfile

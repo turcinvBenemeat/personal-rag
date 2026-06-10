@@ -4,8 +4,8 @@
 
 ```
 Obsidian vault (.md)  ─┐
-                        ├─► Per-file text extraction (ThreadPoolExecutor)
-PDF books & resources  ─┘         │
+PDF books & resources  ─┼─► Per-file text extraction (ThreadPoolExecutor)
+Pre-extracted JSON     ─┘         │
                                    │  one file at a time (streaming)
                                    ▼
                         Chunk by heading + character count
@@ -35,6 +35,7 @@ The pipeline is **fully streaming** — no global accumulation of chunks in RAM.
 1. **Extract** — I/O runs in a `ThreadPoolExecutor` (`markdown_workers` or `pdf_workers` threads):
    - Markdown: reads `.md` via `rglob`, skips excluded dirs/files, strips `{{...}}` Obsidian template vars, splits by heading, chunks by char count with overlap
    - PDF: reads pages into text blocks, chunks by char count; prefers embedded PDF title metadata over filename
+   - JSON (`json_sources`): reads pre-extracted `indexed/*.json` (from the external `doc-text-extractor` pipeline) — uses the document's full `text` and maps its metadata (`primary_topic`→`domain`, `resource_type`→`type`, plus `tags`/`confidence`/`title`). Deterministic input, so re-runs are idempotent (unlike live PDF parsing)
 
 2. **Embed** — always runs in the main thread (never multiprocess); `model.encode()` called with `embedding_batch_size` chunks at a time; `torch.cuda.empty_cache()` after each batch on CUDA
 

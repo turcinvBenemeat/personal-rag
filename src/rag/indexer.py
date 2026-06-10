@@ -2,6 +2,7 @@
 
 import gc
 import hashlib
+import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -171,6 +172,46 @@ def extract_pdf_file(pdf_path: Path, source_type: str, max_chars: int, overlap: 
     if block_text.strip():
         flush_block(block_text, block_start, len(reader.pages))
 
+    return ids, documents, metadatas, None
+
+
+def extract_json_doc(json_path: Path, max_chars: int, overlap: int):
+    """Index a pre-extracted document JSON (doc-text-extractor `indexed/*.json`).
+
+    Each file carries the full extracted `text` plus enriched metadata
+    (title, primary_topic, resource_type, tags, confidence). Reuses the same
+    char-window chunker as the other extractors; IDs are content-hashed off the
+    stable pre-extracted text, so re-runs are idempotent (unlike live PDF
+    parsing). Returns (ids, documents, metadatas, error)."""
+    try:
+        obj = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return [], [], [], f"skip json read error: {json_path.name}: {exc}"
+
+    text = (obj.get("text") or "").strip()
+    if len(text) < 40:
+        return [], [], [], None  # empty / failed extraction — nothing to index
+
+    file_name = str(obj.get("file_name") or json_path.stem)
+    tags_value = obj.get("tags") or []
+    tags = ", ".join(str(t) for t in tags_value) if isinstance(tags_value, list) else str(tags_value)
+    meta_base = {
+        "path": file_name,
+        "title": str(obj.get("title") or file_name),
+        "type": str(obj.get("resource_type") or obj.get("source_group") or "resource"),
+        "domain": str(obj.get("primary_topic") or ""),
+        "status": "",
+        "source": "pdf",  # keep books/resources under the existing `--source pdf` filter
+        "confidence": str(obj.get("confidence") or ""),
+        "tags": tags,
+        "wikilinks": "",
+    }
+
+    ids, documents, metadatas = [], [], []
+    for chunk_index, chunk in enumerate(chunk_text(text, max_chars, overlap)):
+        ids.append(stable_id(file_name, chunk_index, chunk))
+        documents.append(chunk)
+        metadatas.append({**meta_base, "heading": f"part {chunk_index + 1}"})
     return ids, documents, metadatas, None
 
 
@@ -352,6 +393,47 @@ def main():
                     torch.cuda.empty_cache()
 
         log(f"  [{source_type}] complete: {source_chunks} chunks ({source_new} embedded this run)")
+
+    # --- Pre-extracted document JSON (books/resources from doc-text-extractor) ---
+    for json_source in config.get("json_sources", []):
+        json_dir = Path(json_source["path"]).expanduser().resolve()
+
+        if not json_dir.exists():
+            log(f"Warning: json_source path does not exist, skipping: {json_dir}")
+            continue
+
+        json_files = sorted(json_dir.glob("*.json"))
+        log(f"\nJSON source: {len(json_files)} files — {json_dir.name}")
+        source_chunks = 0
+        source_new = 0
+
+        with ThreadPoolExecutor(max_workers=pdf_workers) as pool:
+            futures = [(pool.submit(extract_json_doc, f, max_chars, overlap), f) for f in json_files]
+            for file_idx, (future, json_file) in enumerate(futures, 1):
+                ids, docs, metas, err = future.result()
+                if err:
+                    # A JSON that fails to parse can't be mapped back to its stored
+                    # chunks (their metadata path is the source file_name, not the
+                    # .json filename), so skip without preserving — a corrupt JSON's
+                    # chunks then fall through to the stale prune.
+                    log(f"  [{file_idx}/{len(json_files)}] SKIP {json_file.name}: {err.split(':', 1)[-1].strip()}")
+                    continue
+                if not docs:
+                    continue
+                n_new, n_upd, n_total = index_file_chunks(ids, docs, metas, existing_meta, seen_ids,
+                                                          model, device, embed_batch, collection)
+                log(f"  [{file_idx}/{len(json_files)}] {json_file.name}  ({_index_status(n_new, n_upd, n_total)})")
+                total_chunks  += n_total
+                total_new     += n_new
+                total_updated += n_upd
+                source_chunks += n_total
+                source_new    += n_new
+                del ids, docs, metas
+                gc.collect()
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+
+        log(f"  [json] complete: {source_chunks} chunks ({source_new} embedded this run)")
 
     # Prune chunks that no longer exist in any source (edited or deleted files).
     stale = existing_ids - seen_ids
