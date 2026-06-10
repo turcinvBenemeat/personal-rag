@@ -43,8 +43,15 @@ personal-rag/
 ├── src/
 │   └── rag/
 │       ├── __init__.py
-│       ├── utils.py          # load_config, telemetry suppression, .env loading
-│       ├── indexer.py        # streaming indexer (MD + PDF → ChromaDB); entry: rag-index
+│       ├── utils.py          # load_config, logging setup, telemetry suppression, .env
+│       ├── chunking.py       # heading split, char chunking, stable IDs, wikilinks
+│       ├── extractors/       # one module per source type + iter_sources() registry
+│       │   ├── __init__.py    #   Source namedtuple + iter_sources(config)
+│       │   ├── markdown.py    #   extract_md_file, should_exclude
+│       │   ├── pdf.py         #   extract_pdf_file, clean_pdf_title
+│       │   └── json_doc.py    #   extract_json_doc (pre-extracted indexed/*.json)
+│       ├── indexing.py       # incremental engine: embed/upsert, per-file diff, run_source
+│       ├── indexer.py        # main() orchestration (MD + PDF + JSON → ChromaDB); entry: rag-index
 │       └── query.py          # semantic query CLI; entry: rag-query
 ├── tests/
 │   └── test_queries.py       # 13-query smoke tests across all vault domains
