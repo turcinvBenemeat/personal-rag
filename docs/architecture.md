@@ -26,7 +26,18 @@ Pre-extracted JSON     ─┘         │
                         optional metadata filter (--domain / --type / --source / --confidence)
 ```
 
-## Streaming indexer (`src/rag/indexer.py`)
+## Streaming indexer
+
+The indexer is split by responsibility:
+
+| Module | Role |
+|---|---|
+| `chunking.py` | Pure text helpers — heading split, char-window chunking, content-hashed IDs, wikilinks |
+| `extractors/` | One module per source type (`markdown`, `pdf`, `json_doc`), each returning the common `(ids, docs, metas, err)` tuple; `iter_sources(config)` turns config into a uniform stream of `Source`s |
+| `indexing.py` | The incremental engine — `embed_and_upsert`, `index_file_chunks` (new/update/skip), `preserve_existing`, and `run_source()` |
+| `indexer.py` | `main()` only — sets up the model/collection, snapshots the index, runs every source, prunes stale chunks |
+
+Adding a new source type is a new `extractors/<type>.py` + a block in `iter_sources` + a `config.yaml` entry — `main()` is untouched.
 
 The pipeline is **fully streaming** — no global accumulation of chunks in RAM. Each file is processed end-to-end (extract → embed → upsert → free) before the next file starts.
 

@@ -223,8 +223,11 @@ Pre-extracted JSON     ─┘         │
 
 | Path | Purpose |
 |---|---|
-| `src/rag/utils.py` | Shared helpers — telemetry suppression, `load_config()`, env var overrides |
-| `src/rag/indexer.py` | Streaming indexer — MD + PDF → ChromaDB; CLI entry: `rag-index` |
+| `src/rag/utils.py` | Shared helpers — `load_config()`, logging setup, telemetry suppression, env overrides |
+| `src/rag/chunking.py` | Pure text helpers — heading split, char chunking, stable IDs, wikilinks |
+| `src/rag/extractors/` | One module per source type (`markdown`, `pdf`, `json_doc`) + `iter_sources()` registry |
+| `src/rag/indexing.py` | Incremental engine — embed/upsert, per-file diff, stale prune, `run_source()` |
+| `src/rag/indexer.py` | `main()` orchestration — MD + PDF + JSON → ChromaDB; CLI entry: `rag-index` |
 | `src/rag/query.py` | Semantic query CLI with metadata filters and JSON output; CLI entry: `rag-query` |
 | `tests/test_queries.py` | 13-query retrieval smoke tests across all vault domains |
 | `Dockerfile` | x86 / macOS container image |
