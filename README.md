@@ -7,6 +7,7 @@ Local semantic search over an Obsidian knowledge vault and PDF book library. Ind
 - **Obsidian vault** — Markdown notes with YAML frontmatter (type, domain, status, source, confidence, tags, wikilinks)
 - **PDF books** — technical books from `mindmap/Books/`
 - **PDF resources** — papers, guides, and reference materials from `mindmap/Resources/`
+- **Pre-extracted JSON** *(optional)* — `indexed/*.json` from the external `doc-text-extractor` pipeline (full text + enriched metadata: title, topic→domain, tags, confidence). Deterministic, so re-runs are idempotent — preferred over live PDF parsing for the book/resource library
 
 All content is indexed locally. Nothing is sent to any cloud service.
 
@@ -47,6 +48,7 @@ Paths are set in `config.yaml`. To override them without editing the file, creat
 | `RAG_VAULT_PATH` | `vault_path` in config.yaml |
 | `RAG_PDF_BOOKS_PATH` | pdf_sources entry with `type: book` |
 | `RAG_PDF_RESOURCES_PATH` | pdf_sources entry with `type: resource` |
+| `RAG_JSON_PATH` | json_sources directory (pre-extracted document JSON) |
 | `RAG_INDEX_PATH` | `index_path` (ChromaDB storage dir) |
 
 ```bash
@@ -180,8 +182,8 @@ The first `build-jetson` will be slow (~1.5 GB PyTorch layer). Subsequent builds
 
 ```
 Obsidian vault (.md)  ─┐
-                        ├─► Per-file text extraction (ThreadPoolExecutor, md_workers / pdf_workers)
-PDF books & resources  ─┘         │
+PDF books & resources  ─┼─► Per-file text extraction (ThreadPoolExecutor, md_workers / pdf_workers)
+Pre-extracted JSON     ─┘         │
                                    │  one file at a time
                                    ▼
                         Chunk by heading + character count

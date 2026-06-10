@@ -46,6 +46,7 @@ def load_config() -> dict:
         RAG_VAULT_PATH          overrides vault_path
         RAG_PDF_BOOKS_PATH      overrides pdf_sources entry with type=book
         RAG_PDF_RESOURCES_PATH  overrides pdf_sources entry with type=resource
+        RAG_JSON_PATH           overrides json_sources to a single directory
         RAG_INDEX_PATH          overrides index_path (ChromaDB storage dir)
         RAG_CONFIG_PATH         overrides the config.yaml location itself
     """
@@ -63,6 +64,8 @@ def load_config() -> dict:
         for src in cfg.get("pdf_sources", []):
             if src.get("type") == "resource":
                 src["path"] = resources
+    if json_path := os.environ.get("RAG_JSON_PATH"):
+        cfg["json_sources"] = [{"path": json_path}]
     if index := os.environ.get("RAG_INDEX_PATH"):
         cfg["index_path"] = index
 

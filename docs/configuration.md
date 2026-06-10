@@ -39,6 +39,9 @@ pdf_sources:
     type: book
   - path: '/path/to/Resources/'
     type: resource
+
+json_sources:
+  - path: '~/Documents/knowledge-base-index/indexed'
 ```
 
 ### Field reference
@@ -59,6 +62,7 @@ pdf_sources:
 | `markdown_workers` | `1` | ThreadPoolExecutor threads for MD extraction. 1 = sequential. |
 | `pdf_workers` | `1` | ThreadPoolExecutor threads for PDF extraction. Keep at 1 on Jetson. |
 | `pdf_sources` | `[]` | List of `{path, type}` PDF source directories. `type` is stored as chunk metadata. |
+| `json_sources` | `[]` | List of `{path}` dirs of pre-extracted document JSON (`doc-text-extractor` `indexed/*.json`): full `text` + metadata (title, primary_topic→domain, resource_type→type, tags, confidence). Deterministic, so re-runs are idempotent. |
 
 ## Environment variables
 
@@ -69,6 +73,7 @@ Override any path without editing `config.yaml`. Copy `.env.example` to `.env` �
 | `RAG_VAULT_PATH` | `vault_path` | |
 | `RAG_PDF_BOOKS_PATH` | pdf_sources entry with `type: book` | |
 | `RAG_PDF_RESOURCES_PATH` | pdf_sources entry with `type: resource` | |
+| `RAG_JSON_PATH` | `json_sources` (single dir) | Set to `/index` automatically in Docker (bind-mount your `indexed/` dir). |
 | `RAG_INDEX_PATH` | `index_path` | Set to `/data/chroma` automatically in Docker. |
 | `RAG_LOG_PATH` | `log_path` | Set to `/data/logs/rag.log` automatically in Docker (bind-mounted to `./logs`). |
 | `RAG_LOG_DB_PATH` | `log_db_path` | SQLite log DB path. Defaults to the text log path with a `.sqlite` suffix. |
